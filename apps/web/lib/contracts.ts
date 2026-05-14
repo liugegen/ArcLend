@@ -1,28 +1,49 @@
 /**
- * Contract addresses and ABIs for ArcLend protocol on Arc Network.
+ * Contract addresses and ABIs for ArcLend protocol on Arc Testnet.
+ *
+ * Live deployment (Arc Testnet — chainId 5042002):
+ *   PriceOracle:       0x879995A3a7f4bb4fbE3d90e6e6333480D0258573
+ *   InterestRateModel: 0x34C6a4EE70eb39ebFF55D2C5993e89A1D934Efc5
+ *   ArcLendVault:      0x436f12853eB22760E8bB04BA010113b45308297F
+ *
+ * Official dependencies (Circle / Hashnote):
+ *   USDC:  0x3600000000000000000000000000000000000000
+ *   EURC:  0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a
+ *   USYC:  0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C
+ *   USYC Oracle: 0x52b56c7642E71dc54714d879127d97cd0B3D4581
  */
 
-// ─── Contract Addresses (Arc Testnet) ───────────────────────────────────────
+// ─── Contract Addresses (Arc Testnet — Live Deployment) ─────────────────────
 
 export const ARCLEND_VAULT_ADDRESS =
-  '0x0000000000000000000000000000000000000000' as const;
+  (process.env.NEXT_PUBLIC_LENDING_POOL_ADDRESS as `0x${string}`) ??
+  '0x436f12853eB22760E8bB04BA010113b45308297F' as const;
 
 export const INTEREST_RATE_MODEL_ADDRESS =
-  '0x0000000000000000000000000000000000000000' as const;
+  (process.env.NEXT_PUBLIC_INTEREST_RATE_MODEL as `0x${string}`) ??
+  '0x34C6a4EE70eb39ebFF55D2C5993e89A1D934Efc5' as const;
 
 export const PRICE_ORACLE_ADDRESS =
-  '0x0000000000000000000000000000000000000000' as const;
+  (process.env.NEXT_PUBLIC_PRICE_ORACLE as `0x${string}`) ??
+  '0x879995A3a7f4bb4fbE3d90e6e6333480D0258573' as const;
 
-// ─── Token Addresses (Arc Testnet) ──────────────────────────────────────────
+// ─── Token Addresses (Arc Testnet — Official Circle / Hashnote) ─────────────
 
 export const USDC_ADDRESS =
+  (process.env.NEXT_PUBLIC_USDC_ADDRESS as `0x${string}`) ??
   '0x3600000000000000000000000000000000000000' as const;
 
 export const EURC_ADDRESS =
+  (process.env.NEXT_PUBLIC_EURC_ADDRESS as `0x${string}`) ??
   '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a' as const;
 
 export const USYC_ADDRESS =
+  (process.env.NEXT_PUBLIC_USYC_ADDRESS as `0x${string}`) ??
   '0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C' as const;
+
+export const USYC_ORACLE_ADDRESS =
+  (process.env.NEXT_PUBLIC_USYC_ORACLE as `0x${string}`) ??
+  '0x52b56c7642E71dc54714d879127d97cd0B3D4581' as const;
 
 // ─── ArcLendVault ABI ───────────────────────────────────────────────────────
 

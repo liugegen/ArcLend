@@ -10,7 +10,7 @@ import type {
   ICCTPModule,
   TransferPhase,
   TransferStatus,
-} from './types.js';
+} from './types';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 

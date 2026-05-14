@@ -11,7 +11,7 @@ import type {
   IPaymasterModule,
   PaymasterData,
   UserOperation,
-} from './types.js';
+} from './types';
 
 // ─── Fee Bounds (USDC 6-decimal format) ─────────────────────────────────────
 

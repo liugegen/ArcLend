@@ -1,8 +1,13 @@
 /**
  * Circle SDK client initialization for ArcLend.
  *
- * Exports pre-configured instances of the EmbeddedWallet, Paymaster,
- * and CCTP modules for use throughout the frontend.
+ * MIGRATION NOTE:
+ * Authentication is now handled by the Circle Web SDK (@circle-fin/w3s-pw-web-sdk)
+ * in WalletContext.tsx. The EmbeddedWalletModule here is retained ONLY for
+ * transaction signing operations (signUserOperation), NOT for authentication.
+ *
+ * The CIRCLE_API_KEY is no longer used client-side for auth. It's only used
+ * server-side in /api/circle/route.ts.
  */
 
 import {
@@ -19,18 +24,18 @@ import type {
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const CIRCLE_API_KEY = process.env.NEXT_PUBLIC_CIRCLE_API_KEY ?? '';
 const CIRCLE_API_URL =
   process.env.NEXT_PUBLIC_CIRCLE_API_URL ?? 'https://api.circle.com';
 
 const ARC_TESTNET_CHAIN_ID = 5042002;
-const ARC_TESTNET_RPC = 'https://rpc.testnet.arc.network';
 
-// ─── Embedded Wallet Module ─────────────────────────────────────────────────
+// ─── Embedded Wallet Module (for transaction signing only) ──────────────────
+// NOTE: This module is used for signUserOperation() calls, NOT for authentication.
+// Authentication uses the @circle-fin/w3s-pw-web-sdk directly.
 
 const embeddedWalletConfig: EmbeddedWalletConfig = {
   baseUrl: CIRCLE_API_URL,
-  apiKey: CIRCLE_API_KEY,
+  apiKey: '', // Not used for client-side signing — server handles auth
   chainId: ARC_TESTNET_CHAIN_ID,
   timeoutMs: 10_000,
 };

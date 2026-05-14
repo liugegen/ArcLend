@@ -13,7 +13,7 @@ import type {
   UserOperation,
   WalletInfo,
   WalletSession,
-} from './types.js';
+} from './types';
 
 // ─── Error Types ────────────────────────────────────────────────────────────
 

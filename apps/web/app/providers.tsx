@@ -1,19 +1,32 @@
 'use client';
 
+/**
+ * Root Providers for ArcLend
+ *
+ * Wraps the application with:
+ * - WagmiProvider (Arc Network chain config)
+ * - QueryClientProvider (React Query for data fetching)
+ * - WalletProvider (Circle Web SDK authentication)
+ *
+ * MIGRATION NOTE:
+ * Authentication is now handled by WalletContext using the official
+ * @circle-fin/w3s-pw-web-sdk. The useCircleSDK hook still provides
+ * Paymaster and CCTP modules for transaction operations.
+ */
+
 import { type ReactNode, createContext, useContext } from 'react';
 import { WagmiProvider, createConfig, http } from 'wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { defineChain } from 'viem';
 
-import type { EmbeddedWalletModule, PaymasterModule, CCTPModule } from '@arclend/circle-sdk';
-import {
-  embeddedWalletModule,
-  paymasterModule,
-  cctpModule,
-} from '../lib/circleClient';
+import type { PaymasterModule, CCTPModule } from '@arclend/circle-sdk';
+import { paymasterModule, cctpModule } from '../lib/circleClient';
 import { WalletProvider } from '../contexts/WalletContext';
 
 // ─── Arc Network Chain Definition ───────────────────────────────────────────
+
+const ARC_TESTNET_RPC =
+  process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL ?? 'https://rpc.testnet.arc.network';
 
 export const arcTestnet = defineChain({
   id: 5042002,
@@ -25,7 +38,7 @@ export const arcTestnet = defineChain({
   },
   rpcUrls: {
     default: {
-      http: ['https://rpc.testnet.arc.network'],
+      http: [ARC_TESTNET_RPC],
     },
   },
   blockExplorers: {
@@ -42,7 +55,7 @@ export const arcTestnet = defineChain({
 const wagmiConfig = createConfig({
   chains: [arcTestnet],
   transports: {
-    [arcTestnet.id]: http('https://rpc.testnet.arc.network'),
+    [arcTestnet.id]: http(ARC_TESTNET_RPC),
   },
 });
 
@@ -51,16 +64,15 @@ const wagmiConfig = createConfig({
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 15_000, // 15 seconds — matches rate refresh requirement
+      staleTime: 15_000,
       refetchInterval: 15_000,
     },
   },
 });
 
-// ─── Circle SDK Context ─────────────────────────────────────────────────────
+// ─── Circle SDK Context (Paymaster + CCTP only) ─────────────────────────────
 
 interface CircleSDKContextValue {
-  embeddedWallet: EmbeddedWalletModule;
   paymaster: PaymasterModule;
   cctp: CCTPModule;
 }
@@ -68,8 +80,8 @@ interface CircleSDKContextValue {
 const CircleSDKContext = createContext<CircleSDKContextValue | null>(null);
 
 /**
- * Hook to access Circle SDK module instances.
- * Must be used within a Providers component.
+ * Hook to access Circle SDK module instances (Paymaster, CCTP).
+ * Authentication is handled separately by useWallet() from WalletContext.
  */
 export function useCircleSDK(): CircleSDKContextValue {
   const context = useContext(CircleSDKContext);
@@ -86,14 +98,11 @@ interface ProvidersProps {
 }
 
 /**
- * Root providers wrapping the application with:
- * - WagmiProvider (Arc Network chain config)
- * - QueryClientProvider (React Query)
- * - CircleSDKContext (EmbeddedWallet, Paymaster, CCTP modules)
+ * Root providers wrapping the application.
+ * Authentication is handled by WalletProvider using the Circle Web SDK.
  */
 export function Providers({ children }: ProvidersProps) {
   const circleSDKValue: CircleSDKContextValue = {
-    embeddedWallet: embeddedWalletModule,
     paymaster: paymasterModule,
     cctp: cctpModule,
   };

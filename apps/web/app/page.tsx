@@ -1,27 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useWallet } from '../contexts/WalletContext';
-import type { AuthProvider } from '@arclend/circle-sdk';
-
-// ─── USDC Address (Arc Testnet) ─────────────────────────────────────────────
-
-const USDC_ADDRESS = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+import { useRouter } from 'next/navigation';
+import { useWallet, type AuthProvider } from '../contexts/WalletContext';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-function formatAddress(address: string): string {
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
-
-function formatUSDC(balance: bigint): string {
-  const whole = balance / 1_000_000n;
-  const fractional = balance % 1_000_000n;
-  const fractionalStr = fractional.toString().padStart(6, '0').slice(0, 2);
-  return `${whole.toLocaleString()}.${fractionalStr}`;
-}
-
-// ─── Rate Limit Countdown ───────────────────────────────────────────────────
 
 function useCountdown(retryAfterMs: number | undefined): number {
   const [remaining, setRemaining] = useState(
@@ -56,9 +39,17 @@ function useCountdown(retryAfterMs: number | undefined): number {
 
 export default function Home() {
   const { session, walletInfo, isLoading, error, login, logout } = useWallet();
+  const router = useRouter();
 
   const countdown = useCountdown(error?.retryAfterMs);
   const isRateLimited = error?.type === 'rate_limit' && countdown > 0;
+
+  // Redirect authenticated users to dashboard
+  useEffect(() => {
+    if (session && walletInfo) {
+      router.push('/dashboard');
+    }
+  }, [session, walletInfo, router]);
 
   const handleLogin = (provider: AuthProvider) => {
     if (isRateLimited) return;
@@ -79,38 +70,15 @@ export default function Home() {
     );
   }
 
-  // ─── Authenticated State ──────────────────────────────────────────────────
+  // ─── Authenticated State — redirect handled by useEffect above ─────────
 
   if (session && walletInfo) {
-    const usdcBalance = walletInfo.balances[USDC_ADDRESS] ?? 0n;
-
     return (
       <div style={styles.page}>
         <main style={styles.main}>
-          <h1 style={styles.heading}>ArcLend</h1>
-          <p style={styles.subheading}>Welcome back</p>
-
-          <div style={styles.card}>
-            <div style={styles.cardRow}>
-              <span style={styles.label}>Wallet</span>
-              <span style={styles.value}>
-                {formatAddress(walletInfo.address)}
-              </span>
-            </div>
-            <div style={styles.cardRow}>
-              <span style={styles.label}>USDC Balance</span>
-              <span style={styles.value}>{formatUSDC(usdcBalance)} USDC</span>
-            </div>
+          <div style={styles.spinner} aria-label="Redirecting" role="status">
+            <span style={styles.srOnly}>Redirecting to dashboard...</span>
           </div>
-
-          <button
-            type="button"
-            onClick={logout}
-            style={styles.logoutButton}
-            aria-label="Disconnect wallet"
-          >
-            Disconnect
-          </button>
         </main>
       </div>
     );
@@ -251,27 +219,36 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     padding: '2rem',
+    background: 'var(--background)',
+    position: 'relative',
+    overflow: 'hidden',
   },
   main: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: '1.5rem',
+    gap: '2rem',
     maxWidth: '400px',
     width: '100%',
+    position: 'relative',
+    zIndex: 1,
   },
   heading: {
-    fontSize: '2.5rem',
-    fontWeight: 700,
-    letterSpacing: '-0.02em',
+    fontSize: '2.75rem',
+    fontWeight: 800,
+    letterSpacing: '-0.03em',
     margin: 0,
+    background: 'linear-gradient(135deg, var(--foreground) 0%, var(--muted-foreground) 100%)',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    backgroundClip: 'text',
   },
   subheading: {
     fontSize: '1rem',
-    color: '#666',
+    color: 'var(--muted-foreground)',
     textAlign: 'center',
     margin: 0,
-    lineHeight: 1.5,
+    lineHeight: 1.6,
   },
   buttonGroup: {
     display: 'flex',
@@ -285,15 +262,15 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     gap: '0.75rem',
     width: '100%',
-    padding: '0.875rem 1.5rem',
+    padding: '1rem 1.5rem',
     fontSize: '0.9375rem',
     fontWeight: 500,
-    border: '1px solid #e0e0e0',
-    borderRadius: '0.75rem',
-    background: 'var(--background)',
+    border: '1px solid var(--card-border)',
+    borderRadius: '1rem',
+    background: 'var(--card)',
     color: 'var(--foreground)',
     cursor: 'pointer',
-    transition: 'background 0.15s, border-color 0.15s',
+    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
   },
   loginButtonDisabled: {
     opacity: 0.5,
@@ -302,37 +279,39 @@ const styles: Record<string, React.CSSProperties> = {
   errorContainer: {
     width: '100%',
     padding: '1rem',
-    borderRadius: '0.75rem',
-    background: '#fef2f2',
-    border: '1px solid #fecaca',
+    borderRadius: '1rem',
+    background: 'var(--danger-muted)',
+    border: '1px solid rgba(248, 113, 113, 0.3)',
   },
   errorMessage: {
     fontSize: '0.875rem',
-    color: '#dc2626',
+    color: 'var(--danger)',
     margin: 0,
     lineHeight: 1.5,
   },
   countdown: {
     fontSize: '0.8125rem',
-    color: '#991b1b',
+    color: 'var(--danger)',
     marginTop: '0.5rem',
     fontWeight: 500,
   },
   retryButton: {
-    padding: '0.625rem 1.5rem',
+    padding: '0.75rem 1.5rem',
     fontSize: '0.875rem',
-    fontWeight: 500,
-    border: '1px solid #e0e0e0',
-    borderRadius: '0.5rem',
-    background: 'var(--background)',
+    fontWeight: 600,
+    border: '1px solid var(--card-border)',
+    borderRadius: '0.75rem',
+    background: 'var(--card)',
     color: 'var(--foreground)',
     cursor: 'pointer',
+    transition: 'all 200ms',
   },
   card: {
     width: '100%',
     padding: '1.5rem',
-    borderRadius: '1rem',
-    border: '1px solid #e0e0e0',
+    borderRadius: '1.25rem',
+    border: '1px solid var(--card-border)',
+    background: 'var(--card)',
     display: 'flex',
     flexDirection: 'column',
     gap: '1rem',
@@ -344,28 +323,29 @@ const styles: Record<string, React.CSSProperties> = {
   },
   label: {
     fontSize: '0.875rem',
-    color: '#666',
+    color: 'var(--muted-foreground)',
   },
   value: {
     fontSize: '0.9375rem',
     fontWeight: 600,
     fontFamily: 'var(--font-geist-mono)',
+    color: 'var(--foreground)',
   },
   logoutButton: {
     padding: '0.625rem 1.5rem',
     fontSize: '0.875rem',
     fontWeight: 500,
-    border: '1px solid #e0e0e0',
-    borderRadius: '0.5rem',
-    background: 'var(--background)',
-    color: '#dc2626',
+    border: '1px solid var(--card-border)',
+    borderRadius: '0.75rem',
+    background: 'var(--card)',
+    color: 'var(--danger)',
     cursor: 'pointer',
   },
   spinner: {
-    width: '2rem',
-    height: '2rem',
-    border: '3px solid #e0e0e0',
-    borderTopColor: 'var(--foreground)',
+    width: '2.5rem',
+    height: '2.5rem',
+    border: '3px solid var(--card-border)',
+    borderTopColor: 'var(--accent)',
     borderRadius: '50%',
     animation: 'spin 0.8s linear infinite',
   },

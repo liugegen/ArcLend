@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { encodeFunctionData } from 'viem';
 import { useAccount, useReadContract } from 'wagmi';
 
@@ -51,10 +50,10 @@ function formatHealthFactor(hf: number | null): string {
 }
 
 function getHealthFactorColor(hf: number | null): string {
-  if (hf == null) return 'text-gray-400';
-  if (hf < 1.0) return 'text-red-600';
-  if (hf <= 1.2) return 'text-orange-500';
-  return 'text-green-600';
+  if (hf == null) return 'text-[var(--muted-foreground)]';
+  if (hf < 1.0) return 'text-[var(--danger)]';
+  if (hf <= 1.2) return 'text-[var(--warning)]';
+  return 'text-[var(--success)]';
 }
 
 // ─── Borrow Page ────────────────────────────────────────────────────────────
@@ -230,281 +229,243 @@ export default function BorrowPage() {
 
   if (!isConnected) {
     return (
-      <main className="flex min-h-screen items-center justify-center p-8">
+      <div className="flex min-h-[60vh] items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-900">Borrow USDC</h1>
-          <p className="mt-2 text-gray-600">Connect your wallet to borrow assets.</p>
+          <h1 className="text-2xl font-bold text-[var(--foreground)]">Borrow USDC</h1>
+          <p className="mt-2 text-[var(--muted-foreground)]">Connect your wallet to borrow assets.</p>
         </div>
-      </main>
+      </div>
     );
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <main className="min-h-screen bg-gray-50 p-6">
-      <div className="mx-auto max-w-lg">
-        {/* Back Link */}
-        <Link
-          href="/dashboard"
-          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          Back to Dashboard
-        </Link>
-
-        {/* Page Header */}
-        <h1 className="mt-4 text-2xl font-bold text-gray-900">Borrow</h1>
-        <p className="mt-1 text-sm text-gray-500">
+    <div className="mx-auto max-w-lg space-y-6">
+      {/* Page Header */}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-[var(--foreground)]">Borrow</h1>
+        <p className="mt-1 text-sm text-[var(--muted-foreground)]">
           Borrow USDC against your USYC collateral.
         </p>
+      </div>
 
-        {/* Collateral Info Card */}
-        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-medium text-gray-500">Your Collateral (USYC)</h2>
-          <div className="mt-2 flex items-baseline justify-between">
-            <p className="text-xl font-bold text-gray-900">
-              {formatTokenAmount(collateralBalance, USYC_DECIMALS)} USYC
-            </p>
-            <p className="text-sm text-gray-500">
-              ≈ ${formatTokenAmount(collateralValueUsd, USDC_DECIMALS)}
-            </p>
-          </div>
-          {collateralBalance === 0n && (
-            <p className="mt-2 text-xs text-amber-600">
-              You need to deposit USYC collateral before borrowing.
-            </p>
-          )}
+      {/* Collateral Info Card */}
+      <div className="card-base p-5">
+        <h2 className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Your Collateral (USYC)</h2>
+        <div className="mt-3 flex items-baseline justify-between">
+          <p className="text-xl font-bold text-[var(--foreground)]">
+            {formatTokenAmount(collateralBalance, USYC_DECIMALS)} USYC
+          </p>
+          <p className="text-sm text-[var(--muted-foreground)]">
+            ≈ ${formatTokenAmount(collateralValueUsd, USDC_DECIMALS)}
+          </p>
         </div>
+        {collateralBalance === 0n && (
+          <p className="mt-2 text-xs text-[var(--warning)]">
+            You need to deposit USYC collateral before borrowing.
+          </p>
+        )}
+      </div>
 
-        {/* Health Factor Display */}
-        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-medium text-gray-500">Current Health Factor</h2>
-              <p className={`mt-1 text-2xl font-bold ${getHealthFactorColor(healthFactor)}`}>
-                {formatHealthFactor(healthFactor)}
-              </p>
-            </div>
-            {parsedAmount > 0n && projectedHealthFactor != null && (
-              <div className="text-right">
-                <h2 className="text-sm font-medium text-gray-500">After Borrow</h2>
-                <p className={`mt-1 text-2xl font-bold ${getHealthFactorColor(projectedHealthFactor)}`}>
-                  {formatHealthFactor(projectedHealthFactor)}
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* HF Change Arrow */}
-          {parsedAmount > 0n && projectedHealthFactor != null && healthFactor != null && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2">
-              <span className={`text-sm font-medium ${getHealthFactorColor(healthFactor)}`}>
-                {formatHealthFactor(healthFactor)}
-              </span>
-              <svg className="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-              </svg>
-              <span className={`text-sm font-medium ${getHealthFactorColor(projectedHealthFactor)}`}>
-                {formatHealthFactor(projectedHealthFactor)}
-              </span>
-              {projectedHealthFactor < 1.0 && (
-                <span className="ml-auto text-xs font-medium text-red-600">Liquidatable</span>
-              )}
-              {projectedHealthFactor >= 1.0 && projectedHealthFactor <= 1.2 && (
-                <span className="ml-auto text-xs font-medium text-orange-600">High Risk</span>
-              )}
-            </div>
-          )}
-
-          {/* Liquidation Warning */}
-          {isWarning && (
-            <div className="mt-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2">
-              <p className="text-xs text-orange-800">
-                ⚠️ Your current Health Factor is low. Borrowing more may increase liquidation risk.
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Borrow Form Card */}
-        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          {/* Amount Input */}
+      {/* Health Factor Display */}
+      <div className="card-base p-5">
+        <div className="flex items-center justify-between">
           <div>
-            <label htmlFor="borrow-amount-input" className="block text-sm font-medium text-gray-700">
-              Borrow Amount (USDC)
-            </label>
-            <div className="relative mt-1">
-              <input
-                id="borrow-amount-input"
-                type="text"
-                inputMode="decimal"
-                placeholder="0.00"
-                value={amountInput}
-                onChange={handleAmountChange}
-                disabled={txStatus !== 'idle' && txStatus !== 'failed'}
-                className={`block w-full rounded-lg border px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-1 disabled:opacity-50 ${
-                  validationError
-                    ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
-                    : 'border-gray-300 focus:border-blue-500 focus:ring-blue-500'
-                }`}
-                aria-describedby="borrow-info"
-                aria-invalid={!!validationError}
-              />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
-                USDC
-              </span>
-            </div>
-            <div className="mt-1 flex items-center justify-between">
-              <p id="borrow-info" className="text-xs text-gray-500">
-                Available liquidity: {formatTokenAmount(availableLiquidity, USDC_DECIMALS)} USDC
+            <h2 className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Current Health Factor</h2>
+            <p className={`mt-1.5 text-2xl font-bold ${getHealthFactorColor(healthFactor)}`}>
+              {formatHealthFactor(healthFactor)}
+            </p>
+          </div>
+          {parsedAmount > 0n && projectedHealthFactor != null && (
+            <div className="text-right">
+              <h2 className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">After Borrow</h2>
+              <p className={`mt-1.5 text-2xl font-bold ${getHealthFactorColor(projectedHealthFactor)}`}>
+                {formatHealthFactor(projectedHealthFactor)}
               </p>
-              {currentDebt > 0n && (
-                <p className="text-xs text-gray-500">
-                  Current debt: {formatTokenAmount(currentDebt, USDC_DECIMALS)} USDC
-                </p>
-              )}
             </div>
-            {validationError && (
-              <p className="mt-1 text-xs text-red-600" role="alert">
-                {validationError}
+          )}
+        </div>
+
+        {/* HF Change Arrow */}
+        {parsedAmount > 0n && projectedHealthFactor != null && healthFactor != null && (
+          <div className="mt-3 flex items-center gap-2 rounded-xl bg-[var(--background)] px-3 py-2 ring-1 ring-[var(--card-border)]">
+            <span className={`text-sm font-medium ${getHealthFactorColor(healthFactor)}`}>
+              {formatHealthFactor(healthFactor)}
+            </span>
+            <svg className="h-4 w-4 text-[var(--muted-foreground)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+            <span className={`text-sm font-medium ${getHealthFactorColor(projectedHealthFactor)}`}>
+              {formatHealthFactor(projectedHealthFactor)}
+            </span>
+            {projectedHealthFactor < 1.0 && (
+              <span className="ml-auto text-xs font-semibold text-[var(--danger)]">Liquidatable</span>
+            )}
+            {projectedHealthFactor >= 1.0 && projectedHealthFactor <= 1.2 && (
+              <span className="ml-auto text-xs font-semibold text-[var(--warning)]">High Risk</span>
+            )}
+          </div>
+        )}
+
+        {/* Liquidation Warning */}
+        {isWarning && (
+          <div className="mt-3 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning-muted)] px-3 py-2">
+            <p className="text-xs text-[var(--warning)]">
+              ⚠️ Your current Health Factor is low. Borrowing more may increase liquidation risk.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Borrow Form Card */}
+      <div className="card-base p-6">
+        {/* Amount Input */}
+        <div>
+          <label htmlFor="borrow-amount-input" className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+            Borrow Amount (USDC)
+          </label>
+          <div className="relative mt-2">
+            <input
+              id="borrow-amount-input"
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={amountInput}
+              onChange={handleAmountChange}
+              disabled={txStatus !== 'idle' && txStatus !== 'failed'}
+              className={`block w-full rounded-xl border px-4 py-3 text-lg font-semibold text-[var(--foreground)] placeholder-[var(--muted)] transition-colors focus:outline-none focus:ring-2 disabled:opacity-50 ${
+                validationError
+                  ? 'border-[var(--danger)]/50 bg-[var(--danger-muted)] focus:ring-[var(--danger)]/30'
+                  : 'border-[var(--input-border)] bg-[var(--input-bg)] focus:border-[var(--accent)] focus:ring-[var(--input-focus)]'
+              }`}
+              aria-describedby="borrow-info"
+              aria-invalid={!!validationError}
+            />
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-[var(--muted-foreground)]">
+              USDC
+            </span>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <p id="borrow-info" className="text-xs text-[var(--muted-foreground)]">
+              Available liquidity: {formatTokenAmount(availableLiquidity, USDC_DECIMALS)} USDC
+            </p>
+            {currentDebt > 0n && (
+              <p className="text-xs text-[var(--muted-foreground)]">
+                Debt: {formatTokenAmount(currentDebt, USDC_DECIMALS)}
               </p>
             )}
           </div>
-
-          {/* Fee Estimate Display */}
-          {feeEstimate && (txStatus === 'confirming' || txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
-            <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">Estimated Gas Fee</span>
-                <span className="font-medium text-gray-900">
-                  {formatTokenAmount(feeEstimate.usdcFee, 6)} USDC
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-gray-500">
-                Paid via Circle Paymaster — no ARC token needed
-              </p>
-            </div>
+          {validationError && (
+            <p className="mt-2 text-xs font-medium text-[var(--danger)]" role="alert">
+              {validationError}
+            </p>
           )}
+        </div>
 
-          {/* Paymaster Unavailable Fallback */}
-          {paymasterUnavailable && (
-            <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3">
-              <p className="text-sm font-medium text-orange-800">Paymaster Unavailable</p>
-              <p className="mt-1 text-xs text-orange-700">
-                Gas sponsorship is temporarily unavailable. You can pay gas in ARC token directly.
-              </p>
+        {/* Fee Estimate Display */}
+        {feeEstimate && (txStatus === 'confirming' || txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
+          <div className="mt-5 rounded-xl border border-[var(--card-border)] bg-[var(--background)] p-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-[var(--muted-foreground)]">Gas Fee</span>
+              <span className="font-semibold text-[var(--foreground)]">
+                {formatTokenAmount(feeEstimate.usdcFee, 6)} USDC
+              </span>
             </div>
-          )}
-
-          {/* Transaction Error */}
-          {displayError && txStatus === 'failed' && (
-            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-              <p className="text-sm text-red-800">{displayError}</p>
-            </div>
-          )}
-
-          {/* Transaction Status Indicator */}
-          {(txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
-            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <svg
-                  className="h-4 w-4 animate-spin text-blue-600"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                <span className="text-sm font-medium text-blue-800">
-                  {txStatus === 'signing' && 'Signing transaction...'}
-                  {txStatus === 'submitting' && 'Submitting transaction...'}
-                  {txStatus === 'pending' && 'Waiting for confirmation...'}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Confirmed Status */}
-          {txStatus === 'confirmed' && (
-            <div className="mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <svg className="h-4 w-4 text-green-600" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <span className="text-sm font-medium text-green-800">
-                  Borrow confirmed! USDC has been transferred to your wallet.
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={handleReset}
-                className="mt-2 text-sm font-medium text-green-700 hover:text-green-800"
-              >
-                Borrow more
-              </button>
-            </div>
-          )}
-
-          {/* Action Buttons */}
-          <div className="mt-6">
-            {txStatus === 'idle' || txStatus === 'failed' ? (
-              <button
-                type="button"
-                onClick={handleEstimateFee}
-                disabled={isConfirmDisabled}
-                className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {txStatus === 'failed' ? 'Retry' : 'Estimate Fee & Borrow'}
-              </button>
-            ) : txStatus === 'estimating' ? (
-              <button
-                type="button"
-                disabled
-                className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white opacity-50"
-              >
-                Estimating fee...
-              </button>
-            ) : txStatus === 'confirming' ? (
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={reset}
-                  className="flex-1 rounded-lg border border-gray-300 px-4 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirm}
-                  disabled={isConfirmDisabled}
-                  className="flex-1 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Confirm Borrow
-                </button>
-              </div>
-            ) : null}
+            <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+              Sponsored by Circle Paymaster — no ARC token needed
+            </p>
           </div>
+        )}
+
+        {/* Paymaster Unavailable Fallback */}
+        {paymasterUnavailable && (
+          <div className="mt-5 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning-muted)] p-4">
+            <p className="text-sm font-medium text-[var(--warning)]">Paymaster Unavailable</p>
+            <p className="mt-1 text-xs text-[var(--warning)]/80">
+              Gas sponsorship is temporarily unavailable. You can pay gas in ARC token directly.
+            </p>
+          </div>
+        )}
+
+        {/* Transaction Error */}
+        {displayError && txStatus === 'failed' && (
+          <div className="mt-5 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger-muted)] p-4">
+            <p className="text-sm text-[var(--danger)]">{displayError}</p>
+          </div>
+        )}
+
+        {/* Transaction Status Indicator */}
+        {(txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
+          <div className="mt-5 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-muted)] p-4">
+            <div className="flex items-center gap-3">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
+              <span className="text-sm font-medium text-[var(--accent)]">
+                {txStatus === 'signing' && 'Signing transaction...'}
+                {txStatus === 'submitting' && 'Submitting transaction...'}
+                {txStatus === 'pending' && 'Waiting for confirmation...'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Confirmed Status */}
+        {txStatus === 'confirmed' && (
+          <div className="mt-5 rounded-xl border border-[var(--success)]/30 bg-[var(--success-muted)] p-4">
+            <div className="flex items-center gap-3">
+              <svg className="h-5 w-5 text-[var(--success)]" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              <span className="text-sm font-semibold text-[var(--success)]">
+                Borrow confirmed! USDC has been transferred to your wallet.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleReset}
+              className="mt-3 text-sm font-medium text-[var(--success)] hover:opacity-80"
+            >
+              Borrow more →
+            </button>
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="mt-6">
+          {txStatus === 'idle' || txStatus === 'failed' ? (
+            <button
+              type="button"
+              onClick={handleEstimateFee}
+              disabled={isConfirmDisabled}
+              className="w-full rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl hover:shadow-[var(--accent)]/30 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+            >
+              {txStatus === 'failed' ? 'Retry' : 'Borrow'}
+            </button>
+          ) : txStatus === 'estimating' ? (
+            <button disabled className="w-full rounded-xl bg-[var(--accent)] px-4 py-3.5 text-sm font-semibold text-white opacity-60">
+              Estimating fee...
+            </button>
+          ) : txStatus === 'confirming' ? (
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={reset}
+                className="flex-1 rounded-xl border border-[var(--card-border)] px-4 py-3.5 text-sm font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--card-hover)]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                disabled={isConfirmDisabled}
+                className="flex-1 rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Confirm Borrow
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
-    </main>
+    </div>
   );
 }

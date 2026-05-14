@@ -11,6 +11,7 @@ import { PaymasterUnavailableError } from '@arclend/circle-sdk';
 
 import { useCircleSDK } from '../app/providers';
 import { useWallet } from '../contexts/WalletContext';
+import { embeddedWalletModule } from '../lib/circleClient';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -54,7 +55,8 @@ const MAX_POLL_ATTEMPTS = 30; // 60 seconds max polling
  * and Circle Embedded Wallet for UserOperation signing.
  */
 export function useTransactionFlow(): UseTransactionFlowResult {
-  const { paymaster, embeddedWallet } = useCircleSDK();
+  const { paymaster } = useCircleSDK();
+  const embeddedWallet = embeddedWalletModule;
   const { session } = useWallet();
 
   const [status, setStatus] = useState<TransactionFlowStatus>('idle');
@@ -71,7 +73,7 @@ export function useTransactionFlow(): UseTransactionFlowResult {
    */
   const buildUserOp = useCallback(
     (callData: `0x${string}`): UserOperation => {
-      const sender = session?.walletAddress ?? ('0x0000000000000000000000000000000000000000' as `0x${string}`);
+      const sender = (session?.walletAddress ?? '0x0000000000000000000000000000000000000000') as `0x${string}`;
       return {
         sender,
         nonce: 0n,
@@ -149,7 +151,15 @@ export function useTransactionFlow(): UseTransactionFlowResult {
         paymasterAndData: paymasterData.paymasterData,
       };
 
-      signedOp = await embeddedWallet.signUserOperation(session, userOpWithPaymaster);
+      signedOp = await embeddedWallet.signUserOperation(
+        {
+          userId: session.userToken,
+          walletAddress: session.walletAddress as `0x${string}`,
+          chainId: 5042002,
+          expiresAt: Date.now() + 3600_000,
+        },
+        userOpWithPaymaster,
+      );
     } catch (err) {
       setError({
         message: err instanceof Error ? err.message : 'Failed to sign transaction',

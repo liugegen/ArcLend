@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {};
+const nextConfig = {
+  transpilePackages: ['@arclend/circle-sdk', '@repo/ui'],
+};
 
 export default nextConfig;

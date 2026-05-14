@@ -22,21 +22,21 @@ const AUTO_DISMISS_MS = 5_000;
 // ─── Severity Styles ────────────────────────────────────────────────────────
 
 const severityStyles: Record<ErrorSeverity, string> = {
-  error: 'border-red-500 bg-red-50 text-red-900',
-  warning: 'border-amber-500 bg-amber-50 text-amber-900',
-  info: 'border-blue-500 bg-blue-50 text-blue-900',
+  error: 'border-[var(--danger)]/30 bg-[var(--danger-muted)] text-[var(--danger)]',
+  warning: 'border-[var(--warning)]/30 bg-[var(--warning-muted)] text-[var(--warning)]',
+  info: 'border-[var(--accent)]/30 bg-[var(--accent-muted)] text-[var(--accent)]',
 };
 
 const severityIconStyles: Record<ErrorSeverity, string> = {
-  error: 'text-red-500',
-  warning: 'text-amber-500',
-  info: 'text-blue-500',
+  error: 'text-[var(--danger)]',
+  warning: 'text-[var(--warning)]',
+  info: 'text-[var(--accent)]',
 };
 
 const severityButtonStyles: Record<ErrorSeverity, string> = {
-  error: 'bg-red-600 hover:bg-red-700 text-white',
-  warning: 'bg-amber-600 hover:bg-amber-700 text-white',
-  info: 'bg-blue-600 hover:bg-blue-700 text-white',
+  error: 'bg-[var(--danger)] hover:opacity-80 text-white',
+  warning: 'bg-[var(--warning)] hover:opacity-80 text-black',
+  info: 'bg-[var(--accent)] hover:opacity-80 text-white',
 };
 
 // ─── Icons ──────────────────────────────────────────────────────────────────

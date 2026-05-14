@@ -30,7 +30,7 @@ export type {
   IEmbeddedWalletModule,
   IPaymasterModule,
   ICCTPModule,
-} from './types.js';
+} from './types';
 
 // CCTP Module
 export {
@@ -38,8 +38,8 @@ export {
   TransferTimeoutError,
   AmountBoundsError,
   TransferFailedError,
-} from './cctp.js';
-export type { CCTPModuleConfig } from './cctp.js';
+} from './cctp';
+export type { CCTPModuleConfig } from './cctp';
 
 // Paymaster module
 export {
@@ -49,8 +49,8 @@ export {
   FeeBoundsError,
   MIN_FEE_USDC,
   MAX_FEE_USDC,
-} from './paymaster.js';
-export type { PaymasterModuleConfig } from './paymaster.js';
+} from './paymaster';
+export type { PaymasterModuleConfig } from './paymaster';
 
 // Embedded Wallet module
 export {
@@ -58,5 +58,5 @@ export {
   AuthenticationError,
   TimeoutError,
   RateLimitError,
-} from './embeddedWallet.js';
-export type { EmbeddedWalletConfig } from './embeddedWallet.js';
+} from './embeddedWallet';
+export type { EmbeddedWalletConfig } from './embeddedWallet';
