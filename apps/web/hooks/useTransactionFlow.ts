@@ -1,22 +1,36 @@
 'use client';
 
+/**
+ * useTransactionFlow — Circle User Controlled Wallets transaction execution.
+ *
+ * Architecture:
+ * 1. Client encodes callData (e.g., deposit, approve)
+ * 2. Server creates a contract execution challenge via Circle API
+ * 3. Client SDK executes the challenge (user signs with embedded wallet)
+ * 4. Circle submits the transaction to Arc Network
+ * 5. Client polls for transaction confirmation
+ *
+ * Paymaster Integration (optional, future):
+ * When Circle Paymaster becomes available on Arc Testnet, the flow will
+ * attempt sponsored gas first. If unavailable, it falls through to the
+ * standard contract execution path (gas paid from wallet balance).
+ *
+ * This ensures transactions ALWAYS proceed regardless of paymaster status.
+ */
+
 import { useCallback, useRef, useState } from 'react';
 
-import type {
-  GasFeeEstimate,
-  UserOperation,
-  SignedUserOperation,
-} from '@arclend/circle-sdk';
-import { PaymasterUnavailableError } from '@arclend/circle-sdk';
+import type { GasFeeEstimate } from '@arclend/circle-sdk';
 
-import { useCircleSDK } from '../app/providers';
 import { useWallet } from '../contexts/WalletContext';
-import { embeddedWalletModule } from '../lib/circleClient';
+import { useBalanceRefresh } from './useBalanceRefresh';
+import { ARCLEND_VAULT_ADDRESS } from '../lib/contracts';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type TransactionFlowStatus =
   | 'idle'
+  | 'preparing'
   | 'estimating'
   | 'confirming'
   | 'signing'
@@ -27,190 +41,169 @@ export type TransactionFlowStatus =
 
 export interface TransactionFlowError {
   message: string;
-  code: 'PAYMASTER_UNAVAILABLE' | 'INSUFFICIENT_FEE' | 'SIGNING_FAILED' | 'SUBMISSION_FAILED' | 'UNKNOWN';
+  code:
+    | 'NO_SESSION'
+    | 'CHALLENGE_FAILED'
+    | 'SIGNING_FAILED'
+    | 'SUBMISSION_FAILED'
+    | 'TIMEOUT'
+    | 'UNKNOWN';
 }
 
 export interface UseTransactionFlowResult {
   status: TransactionFlowStatus;
   feeEstimate: GasFeeEstimate | null;
   error: TransactionFlowError | null;
+  /** Whether Circle Paymaster sponsorship is active (future) */
+  gasSponsored: boolean;
+  /** @deprecated Use prepareTransaction instead */
   paymasterUnavailable: boolean;
+  /** Prepare a transaction for execution */
+  prepareTransaction: (contractAddress: `0x${string}`, callData: `0x${string}`) => void;
+  /**
+   * @deprecated Backward-compatible alias. Calls prepareTransaction with ARCLEND_VAULT_ADDRESS.
+   * Used by borrow/withdraw/repay pages that haven't been migrated yet.
+   */
   estimateFee: (callData: `0x${string}`) => Promise<void>;
+  /** Execute the prepared transaction */
   execute: () => Promise<void>;
+  /** Reset the flow back to idle */
   reset: () => void;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = 2_000;
-const MAX_POLL_ATTEMPTS = 30; // 60 seconds max polling
+const POLL_INTERVAL_MS = 3_000;
+const MAX_POLL_ATTEMPTS = 40; // 120 seconds max polling
 
 // ─── Hook ───────────────────────────────────────────────────────────────────
 
 /**
- * Hook managing the full gasless transaction lifecycle:
- * idle → estimating → confirming → signing → submitting → pending → confirmed/failed
- *
- * Uses Circle Paymaster for fee estimation and gas sponsorship,
- * and Circle Embedded Wallet for UserOperation signing.
+ * Hook managing the transaction lifecycle via Circle User Controlled Wallets:
+ * idle → preparing → confirming → signing → submitting → pending → confirmed/failed
  */
 export function useTransactionFlow(): UseTransactionFlowResult {
-  const { paymaster } = useCircleSDK();
-  const embeddedWallet = embeddedWalletModule;
-  const { session } = useWallet();
+  const { session, executeChallenge } = useWallet();
+  const { refreshAll } = useBalanceRefresh();
 
   const [status, setStatus] = useState<TransactionFlowStatus>('idle');
   const [feeEstimate, setFeeEstimate] = useState<GasFeeEstimate | null>(null);
   const [error, setError] = useState<TransactionFlowError | null>(null);
-  const [paymasterUnavailable, setPaymasterUnavailable] = useState(false);
+  const [gasSponsored] = useState(false); // Future: set true when paymaster is live
 
-  // Store the current UserOp and callData for the execute step
-  const userOpRef = useRef<UserOperation | null>(null);
+  // Store transaction params for the execute step
+  const contractAddressRef = useRef<`0x${string}` | null>(null);
   const callDataRef = useRef<`0x${string}` | null>(null);
+  const challengeIdRef = useRef<string | null>(null);
 
   /**
-   * Build a minimal UserOperation from callData for estimation.
+   * Helper: Call the Circle backend API route.
    */
-  const buildUserOp = useCallback(
-    (callData: `0x${string}`): UserOperation => {
-      const sender = (session?.walletAddress ?? '0x0000000000000000000000000000000000000000') as `0x${string}`;
-      return {
-        sender,
-        nonce: 0n,
-        initCode: '0x' as `0x${string}`,
-        callData,
-        callGasLimit: 0n,
-        verificationGasLimit: 0n,
-        preVerificationGas: 0n,
-        maxFeePerGas: 0n,
-        maxPriorityFeePerGas: 0n,
-        paymasterAndData: '0x' as `0x${string}`,
-      };
+  const callCircleApi = useCallback(
+    async (action: string, params: Record<string, unknown> = {}) => {
+      const response = await fetch('/api/circle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...params }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        const msg = data?.message || data?.error || `API error (${response.status})`;
+        throw new Error(msg);
+      }
+
+      return data;
+    },
+    [],
+  );
+
+  /**
+   * Prepare a transaction for execution.
+   * Stores the contract address and callData, transitions to confirming state.
+   * No external API calls here — just prepares the UI for user confirmation.
+   */
+  const prepareTransaction = useCallback(
+    (contractAddress: `0x${string}`, callData: `0x${string}`) => {
+      if (!session) {
+        setError({ message: 'No wallet session. Please log in.', code: 'NO_SESSION' });
+        setStatus('failed');
+        return;
+      }
+
+      contractAddressRef.current = contractAddress;
+      callDataRef.current = callData;
+      setError(null);
+      setFeeEstimate(null);
+      setStatus('confirming');
     },
     [session],
   );
 
   /**
-   * Estimate the gas fee for a transaction.
-   * Transitions: idle → estimating → confirming (or failed)
-   */
-  const estimateFee = useCallback(
-    async (callData: `0x${string}`) => {
-      setStatus('estimating');
-      setError(null);
-      setPaymasterUnavailable(false);
-      callDataRef.current = callData;
-
-      try {
-        const userOp = buildUserOp(callData);
-        const estimate = await paymaster.estimateGasFee(userOp);
-
-        userOpRef.current = userOp;
-        setFeeEstimate(estimate);
-        setStatus('confirming');
-      } catch (err) {
-        if (err instanceof PaymasterUnavailableError) {
-          setPaymasterUnavailable(true);
-          setError({
-            message: 'Paymaster service is unavailable. You can pay gas in ARC token directly.',
-            code: 'PAYMASTER_UNAVAILABLE',
-          });
-        } else {
-          setError({
-            message: err instanceof Error ? err.message : 'Failed to estimate gas fee',
-            code: 'UNKNOWN',
-          });
-        }
-        setStatus('failed');
-      }
-    },
-    [buildUserOp, paymaster],
-  );
-
-  /**
-   * Execute the transaction after user confirmation.
-   * Transitions: confirming → signing → submitting → pending → confirmed/failed
+   * Execute the prepared transaction via Circle User Controlled Wallets.
+   *
+   * Flow:
+   * 1. Create contract execution challenge (server-side)
+   * 2. Execute challenge via Circle SDK (client-side signing)
+   * 3. Poll for transaction confirmation
    */
   const execute = useCallback(async () => {
-    if (!session || !userOpRef.current) {
-      setError({ message: 'No wallet session or transaction prepared', code: 'UNKNOWN' });
+    if (!session) {
+      setError({ message: 'No wallet session. Please log in.', code: 'NO_SESSION' });
       setStatus('failed');
       return;
     }
 
-    // ─── Signing ──────────────────────────────────────────────────────────
+    if (!contractAddressRef.current || !callDataRef.current) {
+      setError({ message: 'No transaction prepared.', code: 'UNKNOWN' });
+      setStatus('failed');
+      return;
+    }
+
+    // ─── Step 1: Create contract execution challenge ────────────────────
     setStatus('signing');
     setError(null);
 
-    let signedOp: SignedUserOperation;
+    let challengeId: string;
     try {
-      // Get paymaster data and inject into UserOp before signing
-      const paymasterData = await paymaster.getPaymasterData(userOpRef.current);
-      const userOpWithPaymaster: UserOperation = {
-        ...userOpRef.current,
-        paymasterAndData: paymasterData.paymasterData,
-      };
+      const result = await callCircleApi('createContractExecution', {
+        userToken: session.userToken,
+        walletId: session.walletId,
+        contractAddress: contractAddressRef.current,
+        callData: callDataRef.current,
+      });
 
-      signedOp = await embeddedWallet.signUserOperation(
-        {
-          userId: session.userToken,
-          walletAddress: session.walletAddress as `0x${string}`,
-          chainId: 5042002,
-          expiresAt: Date.now() + 3600_000,
-        },
-        userOpWithPaymaster,
-      );
+      challengeId = result.challengeId;
+      if (!challengeId) {
+        throw new Error('No challengeId returned from contract execution request');
+      }
+      challengeIdRef.current = challengeId;
     } catch (err) {
       setError({
-        message: err instanceof Error ? err.message : 'Failed to sign transaction',
+        message: err instanceof Error ? err.message : 'Failed to create transaction',
+        code: 'CHALLENGE_FAILED',
+      });
+      setStatus('failed');
+      return;
+    }
+
+    // ─── Step 2: Execute challenge via Circle SDK ───────────────────────
+    setStatus('submitting');
+
+    try {
+      await executeChallenge(challengeId);
+    } catch (err) {
+      setError({
+        message: err instanceof Error ? err.message : 'Transaction signing failed',
         code: 'SIGNING_FAILED',
       });
       setStatus('failed');
       return;
     }
 
-    // ─── Submission ───────────────────────────────────────────────────────
-    setStatus('submitting');
-
-    let txHash: string;
-    try {
-      // Submit the signed UserOp to the bundler
-      const response = await fetch('/api/bundler/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          signedUserOperation: {
-            sender: signedOp.sender,
-            nonce: signedOp.nonce.toString(),
-            initCode: signedOp.initCode,
-            callData: signedOp.callData,
-            callGasLimit: signedOp.callGasLimit.toString(),
-            verificationGasLimit: signedOp.verificationGasLimit.toString(),
-            preVerificationGas: signedOp.preVerificationGas.toString(),
-            maxFeePerGas: signedOp.maxFeePerGas.toString(),
-            maxPriorityFeePerGas: signedOp.maxPriorityFeePerGas.toString(),
-            paymasterAndData: signedOp.paymasterAndData,
-            signature: signedOp.signature,
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Bundler returned HTTP ${response.status}`);
-      }
-
-      const result = (await response.json()) as { txHash: string };
-      txHash = result.txHash;
-    } catch (err) {
-      setError({
-        message: err instanceof Error ? err.message : 'Failed to submit transaction',
-        code: 'SUBMISSION_FAILED',
-      });
-      setStatus('failed');
-      return;
-    }
-
-    // ─── Status Polling ───────────────────────────────────────────────────
+    // ─── Step 3: Poll for transaction confirmation ──────────────────────
     setStatus('pending');
 
     try {
@@ -219,31 +212,49 @@ export function useTransactionFlow(): UseTransactionFlowResult {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
         attempts++;
 
-        const statusResponse = await fetch(`/api/bundler/status?txHash=${txHash}`);
-        if (!statusResponse.ok) continue;
+        try {
+          const txData = await callCircleApi('getTransaction', {
+            userToken: session.userToken,
+            transactionId: challengeIdRef.current,
+          });
 
-        const statusResult = (await statusResponse.json()) as { status: string };
+          const txState = txData?.transaction?.state ?? txData?.state;
 
-        if (statusResult.status === 'confirmed') {
-          setStatus('confirmed');
-          return;
-        }
+          if (txState === 'CONFIRMED' || txState === 'COMPLETE') {
+            setStatus('confirmed');
+            refreshAll();
+            return;
+          }
 
-        if (statusResult.status === 'failed') {
-          setError({ message: 'Transaction failed on-chain', code: 'SUBMISSION_FAILED' });
-          setStatus('failed');
-          return;
+          if (txState === 'FAILED' || txState === 'CANCELLED') {
+            setError({
+              message: `Transaction ${txState.toLowerCase()} on-chain`,
+              code: 'SUBMISSION_FAILED',
+            });
+            setStatus('failed');
+            return;
+          }
+
+          // Still pending — continue polling
+        } catch {
+          // Polling error — continue trying
         }
       }
 
-      // Timeout — treat as pending (user can check later)
-      setError({ message: 'Transaction confirmation timed out. It may still confirm.', code: 'UNKNOWN' });
+      // Timeout — transaction may still confirm
+      setError({
+        message: 'Transaction is still processing. Check your portfolio for updates.',
+        code: 'TIMEOUT',
+      });
       setStatus('failed');
     } catch {
-      setError({ message: 'Failed to poll transaction status', code: 'UNKNOWN' });
+      setError({
+        message: 'Failed to check transaction status',
+        code: 'UNKNOWN',
+      });
       setStatus('failed');
     }
-  }, [session, paymaster, embeddedWallet]);
+  }, [session, callCircleApi, executeChallenge, refreshAll]);
 
   /**
    * Reset the flow back to idle state.
@@ -252,16 +263,29 @@ export function useTransactionFlow(): UseTransactionFlowResult {
     setStatus('idle');
     setFeeEstimate(null);
     setError(null);
-    setPaymasterUnavailable(false);
-    userOpRef.current = null;
+    contractAddressRef.current = null;
     callDataRef.current = null;
+    challengeIdRef.current = null;
   }, []);
+
+  /**
+   * Backward-compatible wrapper for pages that still use the old estimateFee API.
+   * Maps to prepareTransaction with ARCLEND_VAULT_ADDRESS as the default target.
+   */
+  const estimateFee = useCallback(
+    async (callData: `0x${string}`) => {
+      prepareTransaction(ARCLEND_VAULT_ADDRESS as `0x${string}`, callData);
+    },
+    [prepareTransaction],
+  );
 
   return {
     status,
     feeEstimate,
     error,
-    paymasterUnavailable,
+    gasSponsored,
+    paymasterUnavailable: false, // Paymaster is no longer a hard dependency
+    prepareTransaction,
     estimateFee,
     execute,
     reset,

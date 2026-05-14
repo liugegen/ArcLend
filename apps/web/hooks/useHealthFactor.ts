@@ -1,7 +1,7 @@
 'use client';
 
 import { useReadContract } from 'wagmi';
-import { useAccount } from 'wagmi';
+import { useWalletAccount } from './useWalletAccount';
 import { arcLendVaultAbi, ARCLEND_VAULT_ADDRESS } from '../lib/contracts';
 
 /** RAY = 1e27, used for on-chain precision */
@@ -26,7 +26,7 @@ export interface UseHealthFactorResult {
  * Refetches every 15 seconds.
  */
 export function useHealthFactor(): UseHealthFactorResult {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected } = useWalletAccount();
 
   const { data, isLoading, isError, refetch } = useReadContract({
     address: ARCLEND_VAULT_ADDRESS,
@@ -39,8 +39,17 @@ export function useHealthFactor(): UseHealthFactorResult {
     },
   });
 
+  // When there are no borrows, the contract returns type(uint256).max
+  // which represents infinite health. Detect this and return null (∞).
+  // Any value above 1e20 in ray terms is effectively infinite.
+  const MAX_MEANINGFUL_HF_RAY = BigInt('100000000000000000000') * RAY; // 1e20 * RAY
+
   const healthFactor: number | null =
-    data != null ? Number((data as bigint) * 10000n / RAY) / 10000 : null;
+    data != null
+      ? (data as bigint) >= MAX_MEANINGFUL_HF_RAY
+        ? null // Infinite — no borrows
+        : Number((data as bigint) * 10000n / RAY) / 10000
+      : null;
 
   const isWarning = healthFactor != null && healthFactor <= 1.2;
   const isLiquidatable = healthFactor != null && healthFactor < 1.0;

@@ -1,13 +1,14 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { encodeFunctionData } from 'viem';
-import { useAccount, useReadContract } from 'wagmi';
 
 import { useWallet } from '../../../contexts/WalletContext';
-import { useTransactionFlow } from '../../../hooks/useTransactionFlow';
+import { useWalletAccount } from '../../../hooks/useWalletAccount';
+import { useTransactionOrchestrator } from '../../../hooks/useTransactionOrchestrator';
 import { useUserPosition } from '../../../hooks/useUserPosition';
+import { TransactionProgress, TransactionError } from '../../../components/TransactionStatus';
+import { TransactionSuccessModal, type TransactionSuccessData } from '../../../components/TransactionSuccessModal';
 import {
   arcLendVaultAbi,
   ARCLEND_VAULT_ADDRESS,
@@ -43,11 +44,9 @@ function parseTokenAmount(value: string, decimals = 6): bigint {
 // ─── Withdraw Page ──────────────────────────────────────────────────────────
 
 export default function WithdrawPage() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected } = useWalletAccount();
   const { session } = useWallet();
   const { position, usdcPoolState, eurcPoolState, isLoading: isPositionLoading } = useUserPosition();
-
-  // ─── Local State ──────────────────────────────────────────────────────────
 
   const [selectedAsset, setSelectedAsset] = useState<AssetSymbol>('USDC');
   const [amountInput, setAmountInput] = useState('');
@@ -57,22 +56,14 @@ export default function WithdrawPage() {
     [selectedAsset],
   );
 
-  // ─── Transaction Flow ─────────────────────────────────────────────────────
-
-  const {
-    status: txStatus,
-    feeEstimate,
-    error: txError,
-    paymasterUnavailable,
-    estimateFee,
-    execute,
-    reset,
-  } = useTransactionFlow();
+  const { step, error, receipt, executeTransaction, reset } = useTransactionOrchestrator();
 
   // ─── Derived State ────────────────────────────────────────────────────────
 
-  // Calculate user's withdrawable balance (shares → underlying)
-  const userShares = position?.supplyShares ?? 0n;
+  // Use per-asset shares (not the legacy single-asset field)
+  const userShares = selectedAsset === 'USDC'
+    ? (position?.usdcShares ?? 0n)
+    : (position?.eurcShares ?? 0n);
   const poolState = selectedAsset === 'USDC' ? usdcPoolState : eurcPoolState;
 
   const withdrawableBalance = useMemo(() => {
@@ -80,14 +71,12 @@ export default function WithdrawPage() {
     return (userShares * poolState.totalDeposits) / poolState.totalShares;
   }, [userShares, poolState]);
 
-  // Available liquidity in the pool
   const availableLiquidity = useMemo(() => {
     if (!poolState) return 0n;
     const available = poolState.totalDeposits - poolState.totalBorrows;
     return available > 0n ? available : 0n;
   }, [poolState]);
 
-  // Max withdrawable = min(user balance, available liquidity)
   const maxWithdrawable = useMemo(() => {
     return withdrawableBalance < availableLiquidity ? withdrawableBalance : availableLiquidity;
   }, [withdrawableBalance, availableLiquidity]);
@@ -97,7 +86,6 @@ export default function WithdrawPage() {
     [amountInput, asset.decimals],
   );
 
-  // Convert amount to shares for the withdraw call
   const sharesToBurn = useMemo(() => {
     if (!poolState || poolState.totalDeposits === 0n || parsedAmount === 0n) return 0n;
     return (parsedAmount * poolState.totalShares) / poolState.totalDeposits;
@@ -112,6 +100,20 @@ export default function WithdrawPage() {
   }, [amountInput, parsedAmount, withdrawableBalance, availableLiquidity]);
 
   const isValidAmount = parsedAmount > 0n && !validationError;
+  const isProcessing = step !== 'idle' && step !== 'confirmed' && step !== 'failed';
+
+  // Success modal state
+  const [successData, setSuccessData] = useState<TransactionSuccessData | null>(null);
+  if (step === 'confirmed' && receipt && !successData) {
+    setSuccessData({
+      type: 'Withdraw',
+      amount: amountInput,
+      asset: selectedAsset,
+      txHash: receipt.txHash,
+      walletAddress: address,
+      confirmedAt: receipt.confirmedAt,
+    });
+  }
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
@@ -120,10 +122,10 @@ export default function WithdrawPage() {
       const value = e.target.value;
       if (value === '' || /^\d*\.?\d{0,6}$/.test(value)) {
         setAmountInput(value);
-        if (txStatus !== 'idle') reset();
+        if (step !== 'idle') reset();
       }
     },
-    [txStatus, reset],
+    [step, reset],
   );
 
   const handleAssetChange = useCallback(
@@ -137,12 +139,11 @@ export default function WithdrawPage() {
 
   const handleMax = useCallback(() => {
     if (maxWithdrawable > 0n) {
-      const formatted = formatTokenAmount(maxWithdrawable, asset.decimals).replace(/,/g, '');
-      setAmountInput(formatted);
+      setAmountInput(formatTokenAmount(maxWithdrawable, asset.decimals).replace(/,/g, ''));
     }
   }, [maxWithdrawable, asset.decimals]);
 
-  const handleEstimateFee = useCallback(async () => {
+  const handleWithdraw = useCallback(async () => {
     if (!isValidAmount || sharesToBurn === 0n) return;
 
     const withdrawCallData = encodeFunctionData({
@@ -151,21 +152,22 @@ export default function WithdrawPage() {
       args: [asset.address, sharesToBurn],
     });
 
-    await estimateFee(withdrawCallData);
-  }, [isValidAmount, sharesToBurn, asset.address, estimateFee]);
-
-  const handleConfirm = useCallback(async () => {
-    await execute();
-  }, [execute]);
+    // Withdraw doesn't need token approval — just execute directly
+    await executeTransaction({
+      contractAddress: ARCLEND_VAULT_ADDRESS,
+      callData: withdrawCallData,
+    });
+  }, [isValidAmount, sharesToBurn, asset.address, executeTransaction]);
 
   const handleReset = useCallback(() => {
     reset();
     setAmountInput('');
+    setSuccessData(null);
   }, [reset]);
 
-  // ─── Not Connected State ──────────────────────────────────────────────────
+  // ─── Not Connected ────────────────────────────────────────────────────────
 
-  if (!isConnected) {
+  if (!isConnected && !session) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="text-center">
@@ -179,8 +181,11 @@ export default function WithdrawPage() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="mx-auto max-w-lg space-y-6">
-      {/* Header */}
+    <>
+      {successData && (
+        <TransactionSuccessModal data={successData} onClose={handleReset} />
+      )}
+      <div className="mx-auto max-w-lg space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-[var(--foreground)]">Withdraw</h1>
         <p className="mt-1 text-sm text-[var(--muted-foreground)]">
@@ -205,7 +210,6 @@ export default function WithdrawPage() {
 
       {/* Withdraw Form */}
       <div className="card-base p-6">
-        {/* Asset Selector */}
         <div>
           <label htmlFor="withdraw-asset" className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
             Asset
@@ -214,7 +218,7 @@ export default function WithdrawPage() {
             id="withdraw-asset"
             value={selectedAsset}
             onChange={handleAssetChange}
-            disabled={txStatus !== 'idle' && txStatus !== 'failed'}
+            disabled={isProcessing}
             className="mt-2 block w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-4 py-3 text-sm font-medium text-[var(--foreground)] transition-colors focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--input-focus)] disabled:opacity-50"
           >
             {SUPPORTED_ASSETS.map((a) => (
@@ -223,7 +227,6 @@ export default function WithdrawPage() {
           </select>
         </div>
 
-        {/* Amount Input */}
         <div className="mt-5">
           <label htmlFor="withdraw-amount" className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
             Amount
@@ -236,7 +239,7 @@ export default function WithdrawPage() {
               placeholder="0.00"
               value={amountInput}
               onChange={handleAmountChange}
-              disabled={txStatus !== 'idle' && txStatus !== 'failed'}
+              disabled={isProcessing}
               className={`block w-full rounded-xl border px-4 py-3 text-lg font-semibold text-[var(--foreground)] placeholder-[var(--muted)] transition-colors focus:outline-none focus:ring-2 disabled:opacity-50 ${
                 validationError
                   ? 'border-[var(--danger)]/50 bg-[var(--danger-muted)] focus:ring-[var(--danger)]/30'
@@ -252,11 +255,7 @@ export default function WithdrawPage() {
             <p className="text-xs text-[var(--muted-foreground)]">
               Max: {formatTokenAmount(maxWithdrawable, asset.decimals)}
             </p>
-            <button
-              type="button"
-              onClick={handleMax}
-              className="rounded-md px-2 py-0.5 text-xs font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent-muted)]"
-            >
+            <button type="button" onClick={handleMax} disabled={isProcessing} className="rounded-md px-2 py-0.5 text-xs font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent-muted)] disabled:opacity-50">
               MAX
             </button>
           </div>
@@ -265,102 +264,44 @@ export default function WithdrawPage() {
           )}
         </div>
 
-        {/* Fee Estimate */}
-        {feeEstimate && (txStatus === 'confirming' || txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
-          <div className="mt-5 rounded-xl border border-[var(--card-border)] bg-[var(--background)] p-4">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-[var(--muted-foreground)]">Gas Fee</span>
-              <span className="font-semibold text-[var(--foreground)]">
-                {formatTokenAmount(feeEstimate.usdcFee, 6)} USDC
-              </span>
-            </div>
-            <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">Sponsored by Circle Paymaster</p>
-          </div>
-        )}
+        {/* Transaction States */}
+        <TransactionProgress
+          step={step}
+          stepOverrides={{
+            executing: { label: 'Withdrawing assets', detail: 'Sign the withdrawal in your wallet' },
+          }}
+        />
 
-        {/* Paymaster Unavailable */}
-        {paymasterUnavailable && (
-          <div className="mt-5 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning-muted)] p-4">
-            <p className="text-sm font-medium text-[var(--warning)]">Paymaster Unavailable</p>
-            <p className="mt-1 text-xs text-[var(--warning)]/80">You can pay gas in ARC token directly.</p>
-          </div>
-        )}
+        {error && step === 'failed' && <TransactionError error={error} />}
 
-        {/* Error */}
-        {txError && txStatus === 'failed' && (
-          <div className="mt-5 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger-muted)] p-4">
-            <p className="text-sm text-[var(--danger)]">{txError.message}</p>
-          </div>
-        )}
-
-        {/* Transaction Progress */}
-        {(txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
-          <div className="mt-5 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-muted)] p-4">
-            <div className="flex items-center gap-3">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-              <span className="text-sm font-medium text-[var(--accent)]">
-                {txStatus === 'signing' && 'Signing...'}
-                {txStatus === 'submitting' && 'Submitting...'}
-                {txStatus === 'pending' && 'Confirming...'}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Confirmed */}
-        {txStatus === 'confirmed' && (
-          <div className="mt-5 rounded-xl border border-[var(--success)]/30 bg-[var(--success-muted)] p-4">
-            <div className="flex items-center gap-3">
-              <svg className="h-5 w-5 text-[var(--success)]" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              <span className="text-sm font-semibold text-[var(--success)]">Withdrawal confirmed!</span>
-            </div>
-            <button
-              type="button"
-              onClick={handleReset}
-              className="mt-3 text-sm font-medium text-[var(--success)] hover:opacity-80"
-            >
-              Withdraw more →
-            </button>
-          </div>
-        )}
-
-        {/* Action Buttons */}
+        {/* Action Button */}
         <div className="mt-6">
-          {txStatus === 'idle' || txStatus === 'failed' ? (
+          {(step === 'idle' || step === 'failed') && (
             <button
               type="button"
-              onClick={handleEstimateFee}
+              onClick={handleWithdraw}
               disabled={!isValidAmount}
               className="w-full rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl hover:shadow-[var(--accent)]/30 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
-              {txStatus === 'failed' ? 'Retry' : 'Withdraw'}
+              {step === 'failed' ? 'Retry' : 'Withdraw'}
             </button>
-          ) : txStatus === 'estimating' ? (
-            <button disabled className="w-full rounded-xl bg-[var(--accent)] px-4 py-3.5 text-sm font-semibold text-white opacity-60">
-              Estimating...
+          )}
+          {isProcessing && (
+            <button
+              type="button"
+              onClick={reset}
+              className="w-full rounded-xl border border-[var(--card-border)] px-4 py-3.5 text-sm font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--card-hover)]"
+            >
+              Cancel
             </button>
-          ) : txStatus === 'confirming' ? (
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={reset}
-                className="flex-1 rounded-xl border border-[var(--card-border)] px-4 py-3.5 text-sm font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--card-hover)]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirm}
-                className="flex-1 rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl"
-              >
-                Confirm
-              </button>
-            </div>
-          ) : null}
+          )}
         </div>
+
+        <p className="mt-4 text-center text-[10px] text-[var(--muted-foreground)]">
+          Transactions are executed via Circle Embedded Wallet on Arc Network
+        </p>
       </div>
     </div>
+    </>
   );
 }

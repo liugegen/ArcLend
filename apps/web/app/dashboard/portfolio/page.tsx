@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useAccount } from 'wagmi';
+import { useWalletAccount } from '../../../hooks/useWalletAccount';
 import { useUserPosition } from '../../../hooks/useUserPosition';
 import { useHealthFactor } from '../../../hooks/useHealthFactor';
 import { useMarketData } from '../../../hooks/useMarketData';
@@ -64,7 +64,7 @@ function HealthFactorGauge({ value }: { value: number | null }) {
 // ─── Portfolio Page ─────────────────────────────────────────────────────────
 
 export default function PortfolioPage() {
-  const { address } = useAccount();
+  const { address } = useWalletAccount();
   const {
     position,
     usdcPoolState,
@@ -78,20 +78,16 @@ export default function PortfolioPage() {
   // Compute balances
   let suppliedBalance = 0n;
   let borrowedBalance = 0n;
-  let collateralBalance = 0n;
 
-  if (position && usdcPoolState) {
-    if (usdcPoolState.totalShares > 0n) {
-      suppliedBalance =
-        (position.supplyShares * usdcPoolState.totalDeposits) /
-        usdcPoolState.totalShares;
-    }
-    if (position.borrowIndex > 0n) {
+  if (position) {
+    // collateralBalance = total supply value across ALL assets
+    suppliedBalance = position.collateralBalance;
+
+    if (position.borrowIndex > 0n && usdcPoolState) {
       borrowedBalance =
         (position.borrowPrincipal * usdcPoolState.borrowIndex) /
         position.borrowIndex;
     }
-    collateralBalance = position.collateralBalance;
   }
 
   const usdcMarket = markets.find((m) => m.asset === 'USDC');
@@ -119,7 +115,7 @@ export default function PortfolioPage() {
               ${formatTokenAmount(netWorth > 0n ? netWorth : 0n)}
             </p>
           )}
-          <div className="mt-5 grid grid-cols-3 gap-4 border-t border-[var(--card-border)] pt-5">
+          <div className="mt-5 grid grid-cols-2 gap-4 border-t border-[var(--card-border)] pt-5">
             <div>
               <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Supplied</p>
               <p className="mt-1.5 text-sm font-bold text-[var(--success)]">
@@ -130,12 +126,6 @@ export default function PortfolioPage() {
               <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Borrowed</p>
               <p className="mt-1.5 text-sm font-bold text-[var(--danger)]">
                 ${formatTokenAmount(borrowedBalance)}
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Collateral</p>
-              <p className="mt-1.5 text-sm font-bold text-[var(--foreground)]">
-                {formatTokenAmount(collateralBalance, 18)} USYC
               </p>
             </div>
           </div>
@@ -237,27 +227,7 @@ export default function PortfolioPage() {
               </div>
             )}
 
-            {/* Collateral Position */}
-            {collateralBalance > 0n && (
-              <div className="flex items-center justify-between rounded-lg border border-[var(--card-border)] bg-[var(--background)] p-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--warning-muted)]">
-                    <svg className="h-4 w-4 text-[var(--warning)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-[var(--foreground)]">USYC Collateral</p>
-                    <p className="text-xs text-[var(--muted-foreground)]">Locked as collateral</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold text-[var(--foreground)]">
-                    {formatTokenAmount(collateralBalance, 18)} USYC
-                  </p>
-                </div>
-              </div>
-            )}
+            {/* Collateral Position — hidden for MVP (USDC-only model) */}
           </div>
         )}
       </div>
@@ -290,8 +260,8 @@ export default function PortfolioPage() {
                   U
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-[var(--foreground)]">USDC (Pre-credited)</p>
-                  <p className="text-xs text-[var(--muted-foreground)]">Bridging from Arbitrum</p>
+                  <p className="text-sm font-medium text-[var(--foreground)]">USDC (Pending)</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">Cross-chain transfer</p>
                 </div>
               </div>
               <p className="text-sm font-semibold text-[var(--muted-foreground)]">

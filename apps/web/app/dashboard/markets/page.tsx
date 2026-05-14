@@ -190,37 +190,11 @@ export default function MarketsPage() {
             );
           })}
 
-          {/* Collateral Asset Card */}
-          <div className="card-base overflow-hidden p-6">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-[var(--warning-muted)] to-[var(--warning)]/5 text-sm font-bold text-[var(--warning)] ring-1 ring-[var(--card-border)]">
-                U
-              </div>
-              <div className="flex-1">
-                <h3 className="text-base font-semibold text-[var(--foreground)]">USYC</h3>
-                <p className="text-xs text-[var(--muted-foreground)]">
-                  Hashnote US Yield Coin — Collateral Only
-                </p>
-              </div>
-              <span className="rounded-full bg-[var(--warning-muted)] px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--warning)]">
-                Collateral
-              </span>
+          {markets.length === 0 && (
+            <div className="card-base flex flex-col items-center justify-center p-12 text-center">
+              <p className="text-sm text-[var(--muted-foreground)]">No markets available</p>
             </div>
-            <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Collateral Factor</p>
-                <p className="mt-1.5 text-lg font-bold text-[var(--foreground)]">{COLLATERAL_FACTOR}%</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Liquidation Incentive</p>
-                <p className="mt-1.5 text-lg font-bold text-[var(--foreground)]">5%</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Oracle</p>
-                <p className="mt-1.5 text-sm font-medium text-[var(--muted-foreground)]">Chainlink-compatible</p>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
       )}
     </div>

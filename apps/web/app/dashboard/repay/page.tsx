@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useMemo, useCallback } from 'react';
-import { useAccount } from 'wagmi';
+import { useWalletAccount } from '../../../hooks/useWalletAccount';
 import { encodeFunctionData, parseUnits, formatUnits } from 'viem';
 
 import { useUserPosition } from '../../../hooks/useUserPosition';
-import { useTransactionFlow } from '../../../hooks/useTransactionFlow';
+import { useTransactionOrchestrator } from '../../../hooks/useTransactionOrchestrator';
+import { TransactionProgress, TransactionError } from '../../../components/TransactionStatus';
+import { TransactionSuccessModal, type TransactionSuccessData } from '../../../components/TransactionSuccessModal';
 import {
   arcLendVaultAbi,
   ARCLEND_VAULT_ADDRESS,
@@ -32,18 +34,9 @@ function formatUSDCFull(amount: bigint): string {
 // ─── Repay Page ─────────────────────────────────────────────────────────────
 
 export default function RepayPage() {
-  const { address, isConnected } = useAccount();
-  const { position, usdcPoolState, isLoading, isError, refetch } =
-    useUserPosition();
-  const {
-    status: txStatus,
-    feeEstimate: txFeeEstimate,
-    error: txError,
-    paymasterUnavailable,
-    estimateFee,
-    execute,
-    reset: txReset,
-  } = useTransactionFlow();
+  const { address, isConnected } = useWalletAccount();
+  const { position, usdcPoolState, isLoading, refetch } = useUserPosition();
+  const { step, error: txError, receipt, executeTransaction, reset } = useTransactionOrchestrator();
 
   const [amountInput, setAmountInput] = useState('');
 
@@ -52,15 +45,10 @@ export default function RepayPage() {
   const outstandingDebt: bigint = useMemo(() => {
     if (!position || !usdcPoolState) return 0n;
     if (position.borrowIndex === 0n) return 0n;
-
-    // debt = principal × currentBorrowIndex / userBorrowIndex
-    return (
-      (position.borrowPrincipal * usdcPoolState.borrowIndex) /
-      position.borrowIndex
-    );
+    return (position.borrowPrincipal * usdcPoolState.borrowIndex) / position.borrowIndex;
   }, [position, usdcPoolState]);
 
-  // ─── Parse Input Amount ─────────────────────────────────────────────────
+  // ─── Parse Input ────────────────────────────────────────────────────────
 
   const parsedAmount: bigint | null = useMemo(() => {
     if (!amountInput || amountInput.trim() === '') return null;
@@ -72,18 +60,36 @@ export default function RepayPage() {
     }
   }, [amountInput]);
 
-  // ─── Overpayment Detection ──────────────────────────────────────────────
+  const isOverpayment = parsedAmount !== null && outstandingDebt > 0n && parsedAmount > outstandingDebt;
+  const isProcessing = step !== 'idle' && step !== 'confirmed' && step !== 'failed';
+  const hasNoDebt = outstandingDebt === 0n && !isLoading;
+  const isAmountValid = parsedAmount !== null && parsedAmount > 0n;
 
-  const isOverpayment =
-    parsedAmount !== null && outstandingDebt > 0n && parsedAmount > outstandingDebt;
+  // Success modal
+  const [successData, setSuccessData] = useState<TransactionSuccessData | null>(null);
+  if (step === 'confirmed' && receipt && !successData) {
+    setSuccessData({
+      type: 'Repay',
+      amount: amountInput,
+      asset: 'USDC',
+      txHash: receipt.txHash,
+      walletAddress: address,
+      confirmedAt: receipt.confirmedAt,
+    });
+  }
 
-  const actualAmountApplied: bigint = useMemo(() => {
-    if (parsedAmount === null) return 0n;
-    if (outstandingDebt === 0n) return 0n;
-    return parsedAmount > outstandingDebt ? outstandingDebt : parsedAmount;
-  }, [parsedAmount, outstandingDebt]);
+  // ─── Handlers ─────────────────────────────────────────────────────────────
 
-  // ─── Max Button Handler ─────────────────────────────────────────────────
+  const handleAmountChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      if (value === '' || /^\d*\.?\d{0,6}$/.test(value)) {
+        setAmountInput(value);
+        if (step !== 'idle') reset();
+      }
+    },
+    [step, reset],
+  );
 
   const handleMax = useCallback(() => {
     if (outstandingDebt > 0n) {
@@ -91,9 +97,7 @@ export default function RepayPage() {
     }
   }, [outstandingDebt]);
 
-  // ─── Estimate Fee ───────────────────────────────────────────────────────
-
-  const handleEstimateFee = useCallback(async () => {
+  const handleRepay = useCallback(async () => {
     if (!parsedAmount || !address) return;
 
     const callData = encodeFunctionData({
@@ -102,30 +106,22 @@ export default function RepayPage() {
       args: [USDC_ADDRESS, parsedAmount],
     });
 
-    await estimateFee(callData);
-  }, [parsedAmount, address, estimateFee]);
-
-  // ─── Confirm Transaction ────────────────────────────────────────────────
-
-  const handleConfirm = useCallback(async () => {
-    await execute();
-  }, [execute]);
-
-  // ─── Reset Flow ─────────────────────────────────────────────────────────
+    // Repay needs token approval (USDC → vault)
+    await executeTransaction({
+      contractAddress: ARCLEND_VAULT_ADDRESS,
+      callData,
+      tokenAddress: USDC_ADDRESS,
+      spenderAddress: ARCLEND_VAULT_ADDRESS,
+      requiredAllowance: parsedAmount,
+    });
+  }, [parsedAmount, address, executeTransaction]);
 
   const handleReset = useCallback(() => {
-    txReset();
+    reset();
     setAmountInput('');
+    setSuccessData(null);
     refetch();
-  }, [txReset, refetch]);
-
-  // ─── Validation ─────────────────────────────────────────────────────────
-
-  const hasNoDebt = outstandingDebt === 0n && !isLoading;
-  const isAmountValid = parsedAmount !== null && parsedAmount > 0n;
-  const canEstimate =
-    isAmountValid && !hasNoDebt && txStatus === 'idle';
-  const canConfirm = txStatus === 'confirming';
+  }, [reset, refetch]);
 
   // ─── Not Connected ──────────────────────────────────────────────────────
 
@@ -134,9 +130,7 @@ export default function RepayPage() {
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-[var(--foreground)]">Repay Loan</h1>
-          <p className="mt-2 text-sm text-[var(--muted-foreground)]">
-            Connect your wallet to repay your outstanding debt.
-          </p>
+          <p className="mt-2 text-sm text-[var(--muted-foreground)]">Connect your wallet to repay.</p>
         </div>
       </div>
     );
@@ -145,224 +139,118 @@ export default function RepayPage() {
   // ─── Render ─────────────────────────────────────────────────────────────
 
   return (
-    <div className="mx-auto max-w-lg space-y-6">
-      {/* Header */}
+    <>
+      {successData && (
+        <TransactionSuccessModal data={successData} onClose={handleReset} />
+      )}
+      <div className="mx-auto max-w-lg space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-[var(--foreground)]">Repay</h1>
         <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-          Repay your outstanding USDC debt to free up collateral.
+          Repay your outstanding USDC debt to improve your health factor.
         </p>
       </div>
 
-      {/* Outstanding Debt Display */}
+      {/* Debt Overview */}
       <div className="card-base p-5">
         <p className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Outstanding Debt</p>
         {isLoading ? (
           <div className="mt-3 h-8 w-32 animate-pulse rounded-lg bg-white/[0.04]" />
-        ) : isError ? (
-          <div className="mt-3 flex items-center gap-2 text-sm text-[var(--warning)]">
-            <span>Unable to load debt data</span>
-            <button
-              onClick={() => refetch()}
-              className="rounded-lg bg-[var(--warning-muted)] px-2 py-1 text-xs font-medium hover:opacity-80"
-            >
-              Retry
-            </button>
-          </div>
         ) : (
-          <p className="mt-3 text-3xl font-bold tracking-tight text-[var(--foreground)]">
-            {formatUSDC(outstandingDebt)} <span className="text-lg text-[var(--muted-foreground)]">USDC</span>
+          <p className="mt-3 text-2xl font-bold tracking-tight text-[var(--danger)]">
+            {hasNoDebt ? '$0.00' : `$${formatUSDC(outstandingDebt)}`}
           </p>
+        )}
+        {hasNoDebt && (
+          <p className="mt-2 text-xs text-[var(--success)]">You have no outstanding debt.</p>
         )}
       </div>
 
-      {/* No Debt State */}
-      {hasNoDebt && !isLoading && (
-        <div className="rounded-xl border border-[var(--success)]/30 bg-[var(--success-muted)] px-4 py-3 text-sm text-[var(--success)]">
-          You have no outstanding debt. Nothing to repay.
-        </div>
-      )}
-
-      {/* Amount Input */}
-      {!hasNoDebt && txStatus !== 'confirmed' && (
-        <div className="card-base p-6">
-          <label
-            htmlFor="repay-amount"
-            className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]"
-          >
+      {/* Repay Form */}
+      <div className="card-base p-6">
+        <div>
+          <label htmlFor="repay-amount" className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
             Repay Amount (USDC)
           </label>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="relative mt-2">
             <input
               id="repay-amount"
               type="text"
               inputMode="decimal"
               placeholder="0.00"
               value={amountInput}
-              onChange={(e) => setAmountInput(e.target.value)}
-              disabled={
-                txStatus !== 'idle' &&
-                txStatus !== 'failed'
-              }
-              className="flex-1 rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-4 py-3 text-lg font-semibold text-[var(--foreground)] placeholder-[var(--muted)] transition-colors focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--input-focus)] disabled:opacity-50"
+              onChange={handleAmountChange}
+              disabled={isProcessing || hasNoDebt}
+              className={`block w-full rounded-xl border px-4 py-3 text-lg font-semibold text-[var(--foreground)] placeholder-[var(--muted)] transition-colors focus:outline-none focus:ring-2 disabled:opacity-50 ${
+                isOverpayment
+                  ? 'border-[var(--warning)]/50 bg-[var(--warning-muted)] focus:ring-[var(--warning)]/30'
+                  : 'border-[var(--input-border)] bg-[var(--input-bg)] focus:border-[var(--accent)] focus:ring-[var(--input-focus)]'
+              }`}
+              aria-invalid={!!isOverpayment}
             />
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-[var(--muted-foreground)]">
+              USDC
+            </span>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <p className="text-xs text-[var(--muted-foreground)]">
+              Debt: {formatUSDC(outstandingDebt)} USDC
+            </p>
             <button
+              type="button"
               onClick={handleMax}
-              disabled={
-                outstandingDebt === 0n ||
-                (txStatus !== 'idle' && txStatus !== 'failed')
-              }
-              className="rounded-xl bg-[var(--accent-muted)] px-4 py-3 text-sm font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/20 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isProcessing || hasNoDebt}
+              className="rounded-md px-2 py-0.5 text-xs font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent-muted)] disabled:opacity-50"
             >
-              Max
+              MAX
             </button>
           </div>
-
-          {/* Overpayment Warning */}
           {isOverpayment && (
-            <div className="mt-3 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning-muted)] px-3 py-2 text-sm text-[var(--warning)]">
-              Only{' '}
-              <span className="font-semibold">
-                {formatUSDC(actualAmountApplied)} USDC
-              </span>{' '}
-              will be applied to your debt. The excess will be returned.
-            </div>
-          )}
-
-          {/* Fee Estimate Display */}
-          {txFeeEstimate && (
-            <div className="mt-5 rounded-xl border border-[var(--card-border)] bg-[var(--background)] p-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-[var(--muted-foreground)]">Gas Fee</span>
-                <span className="font-semibold text-[var(--foreground)]">
-                  {formatUnits(txFeeEstimate.usdcFee, USDC_DECIMALS)} USDC
-                </span>
-              </div>
-              <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">
-                <span>Paid via Circle Paymaster (gasless)</span>
-              </div>
-            </div>
-          )}
-
-          {/* Error Display */}
-          {txError && (
-            <div className="mt-3 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger-muted)] px-3 py-2 text-sm text-[var(--danger)]">
-              {txError.message}
-            </div>
-          )}
-
-          {/* Action Buttons */}
-          <div className="mt-6">
-            {txStatus === 'idle' || txStatus === 'failed' ? (
-              <button
-                onClick={handleEstimateFee}
-                disabled={!canEstimate}
-                className="w-full rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl hover:shadow-[var(--accent)]/30 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
-              >
-                {txStatus === 'failed' ? 'Retry' : 'Repay'}
-              </button>
-            ) : txStatus === 'estimating' ? (
-              <button
-                disabled
-                className="w-full rounded-xl bg-[var(--accent)] px-4 py-3.5 text-sm font-semibold text-white opacity-60"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                  Estimating...
-                </span>
-              </button>
-            ) : txStatus === 'confirming' ? (
-              <button
-                onClick={handleConfirm}
-                className="w-full rounded-xl bg-gradient-to-r from-[var(--success)] to-emerald-400 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--success)]/20 transition-all hover:shadow-xl"
-              >
-                Confirm Repayment
-              </button>
-            ) : txStatus === 'pending' || txStatus === 'signing' || txStatus === 'submitting' ? (
-              <button
-                disabled
-                className="w-full rounded-xl bg-[var(--accent)] px-4 py-3.5 text-sm font-semibold text-white opacity-60"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                  Processing...
-                </span>
-              </button>
-            ) : null}
-          </div>
-        </div>
-      )}
-
-      {/* Transaction Status — Pending */}
-      {(txStatus === 'pending' || txStatus === 'signing' || txStatus === 'submitting') && (
-        <div className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-muted)] p-5">
-          <div className="flex items-center gap-3">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-            <div>
-              <p className="font-medium text-[var(--accent)]">Transaction Pending</p>
-              <p className="text-sm text-[var(--accent)]/80">
-                Your repayment is being processed on-chain...
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Transaction Status — Confirmed */}
-      {txStatus === 'confirmed' && (
-        <div className="rounded-xl border border-[var(--success)]/30 bg-[var(--success-muted)] p-5">
-          <div className="flex items-center gap-3">
-            <svg className="h-6 w-6 text-[var(--success)]" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-            <div>
-              <p className="font-medium text-[var(--success)]">Repayment Confirmed</p>
-              <p className="text-sm text-[var(--success)]/80">
-                Successfully repaid{' '}
-                <span className="font-semibold">
-                  {formatUSDC(actualAmountApplied)} USDC
-                </span>{' '}
-                of your debt.
-              </p>
-            </div>
-          </div>
-
-          {/* Updated Debt Balance */}
-          <div className="mt-4 rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-4 py-3">
-            <p className="text-xs text-[var(--muted-foreground)]">Updated Debt Balance</p>
-            <p className="mt-1 text-xl font-bold text-[var(--foreground)]">
-              {formatUSDC(
-                outstandingDebt > actualAmountApplied
-                  ? outstandingDebt - actualAmountApplied
-                  : 0n,
-              )}{' '}
-              USDC
+            <p className="mt-2 text-xs text-[var(--warning)]">
+              Amount exceeds debt. Only {formatUSDC(outstandingDebt)} USDC will be applied.
             </p>
-          </div>
-
-          <button
-            onClick={handleReset}
-            className="mt-4 w-full rounded-xl border border-[var(--success)]/30 px-4 py-2.5 text-sm font-medium text-[var(--success)] transition-colors hover:bg-[var(--success-muted)]"
-          >
-            Make Another Repayment
-          </button>
+          )}
         </div>
-      )}
 
-      {/* Transaction Status — Failed */}
-      {txStatus === 'failed' && txError && (
-        <div className="rounded-xl border border-[var(--danger)]/30 bg-[var(--danger-muted)] p-5">
-          <div className="flex items-center gap-3">
-            <svg className="h-5 w-5 text-[var(--danger)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-            <div>
-              <p className="font-medium text-[var(--danger)]">Transaction Failed</p>
-              <p className="text-sm text-[var(--danger)]/80">{txError.message}</p>
-            </div>
-          </div>
+        {/* Transaction States */}
+        <TransactionProgress
+          step={step}
+          stepOverrides={{
+            approving: { label: 'Approving USDC', detail: 'Sign the approval in your wallet' },
+            executing: { label: 'Repaying debt', detail: 'Sign the repay transaction in your wallet' },
+          }}
+        />
+
+        {txError && step === 'failed' && <TransactionError error={txError} />}
+
+        {/* Action Button */}
+        <div className="mt-6">
+          {(step === 'idle' || step === 'failed') && (
+            <button
+              type="button"
+              onClick={handleRepay}
+              disabled={!isAmountValid || hasNoDebt}
+              className="w-full rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl hover:shadow-[var(--accent)]/30 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+            >
+              {step === 'failed' ? 'Retry' : 'Repay'}
+            </button>
+          )}
+          {isProcessing && (
+            <button
+              type="button"
+              onClick={reset}
+              className="w-full rounded-xl border border-[var(--card-border)] px-4 py-3.5 text-sm font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--card-hover)]"
+            >
+              Cancel
+            </button>
+          )}
         </div>
-      )}
+
+        <p className="mt-4 text-center text-[10px] text-[var(--muted-foreground)]">
+          Transactions are executed via Circle Embedded Wallet on Arc Network
+        </p>
+      </div>
     </div>
+    </>
   );
 }

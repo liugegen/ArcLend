@@ -1,33 +1,31 @@
 /**
  * Contract addresses and ABIs for ArcLend protocol on Arc Testnet.
  *
- * Live deployment (Arc Testnet — chainId 5042002):
- *   PriceOracle:       0x879995A3a7f4bb4fbE3d90e6e6333480D0258573
- *   InterestRateModel: 0x34C6a4EE70eb39ebFF55D2C5993e89A1D934Efc5
- *   ArcLendVault:      0x436f12853eB22760E8bB04BA010113b45308297F
+ * v2 Deployment (Arc Testnet — chainId 5042002, Auto-Collateral Model):
+ *   PriceOracle:       0x31A1E71E98A3f2ABeAb9C999591cfb80a7E2641f
+ *   InterestRateModel: 0xa166A2C35EE43688FAcdb22657876b83307b9065
+ *   ArcLendVault:      0x299AbD3BDfE6b8d0400B105e32CEDDe7eD218Ad8
  *
- * Official dependencies (Circle / Hashnote):
+ * Official Circle Assets:
  *   USDC:  0x3600000000000000000000000000000000000000
  *   EURC:  0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a
- *   USYC:  0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C
- *   USYC Oracle: 0x52b56c7642E71dc54714d879127d97cd0B3D4581
  */
 
-// ─── Contract Addresses (Arc Testnet — Live Deployment) ─────────────────────
+// ─── Contract Addresses (Arc Testnet — v2 Auto-Collateral Deployment) ───────
 
 export const ARCLEND_VAULT_ADDRESS =
   (process.env.NEXT_PUBLIC_LENDING_POOL_ADDRESS as `0x${string}`) ??
-  '0x436f12853eB22760E8bB04BA010113b45308297F' as const;
+  '0x299AbD3BDfE6b8d0400B105e32CEDDe7eD218Ad8' as const;
 
 export const INTEREST_RATE_MODEL_ADDRESS =
   (process.env.NEXT_PUBLIC_INTEREST_RATE_MODEL as `0x${string}`) ??
-  '0x34C6a4EE70eb39ebFF55D2C5993e89A1D934Efc5' as const;
+  '0xa166A2C35EE43688FAcdb22657876b83307b9065' as const;
 
 export const PRICE_ORACLE_ADDRESS =
   (process.env.NEXT_PUBLIC_PRICE_ORACLE as `0x${string}`) ??
-  '0x879995A3a7f4bb4fbE3d90e6e6333480D0258573' as const;
+  '0x31A1E71E98A3f2ABeAb9C999591cfb80a7E2641f' as const;
 
-// ─── Token Addresses (Arc Testnet — Official Circle / Hashnote) ─────────────
+// ─── Token Addresses (Arc Testnet — Official Circle) ────────────────────────
 
 export const USDC_ADDRESS =
   (process.env.NEXT_PUBLIC_USDC_ADDRESS as `0x${string}`) ??
@@ -37,15 +35,7 @@ export const EURC_ADDRESS =
   (process.env.NEXT_PUBLIC_EURC_ADDRESS as `0x${string}`) ??
   '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a' as const;
 
-export const USYC_ADDRESS =
-  (process.env.NEXT_PUBLIC_USYC_ADDRESS as `0x${string}`) ??
-  '0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C' as const;
-
-export const USYC_ORACLE_ADDRESS =
-  (process.env.NEXT_PUBLIC_USYC_ORACLE as `0x${string}`) ??
-  '0x52b56c7642E71dc54714d879127d97cd0B3D4581' as const;
-
-// ─── ArcLendVault ABI ───────────────────────────────────────────────────────
+// ─── ArcLendVault ABI (v2 — Auto-Collateral Model) ──────────────────────────
 
 export const arcLendVaultAbi = [
   {
@@ -108,6 +98,20 @@ export const arcLendVaultAbi = [
   },
   {
     type: 'function',
+    name: 'getBorrowPower',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getTotalDebt',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'getUserPosition',
     inputs: [{ name: 'user', type: 'address' }],
     outputs: [
@@ -115,7 +119,7 @@ export const arcLendVaultAbi = [
         name: '',
         type: 'tuple',
         components: [
-          { name: 'supplyShares', type: 'uint256' },
+          { name: 'shareBalance', type: 'uint256' },
           { name: 'collateralBalance', type: 'uint256' },
           { name: 'borrowPrincipal', type: 'uint256' },
           { name: 'borrowIndex', type: 'uint256' },

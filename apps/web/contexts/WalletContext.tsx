@@ -67,6 +67,8 @@ interface WalletContextValue {
   error: WalletError | null;
   login: (provider: AuthProvider) => Promise<void>;
   logout: () => void;
+  /** Execute a Circle challenge (transaction signing) using the initialized SDK */
+  executeChallenge: (challengeId: string) => Promise<void>;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -74,6 +76,16 @@ interface WalletContextValue {
 const CIRCLE_APP_ID = process.env.NEXT_PUBLIC_CIRCLE_APP_ID ?? '';
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? '';
 const SESSION_KEY = 'arclend_circle_session';
+
+// Diagnostic: log SDK environment on load (never log secrets)
+if (typeof window !== 'undefined') {
+  const maskedAppId = CIRCLE_APP_ID
+    ? `${CIRCLE_APP_ID.slice(0, 8)}...${CIRCLE_APP_ID.slice(-4)}`
+    : '(not set)';
+  console.info(
+    `[ArcLend] Circle SDK config — appId: ${maskedAppId}, env: ${CIRCLE_APP_ID ? 'configured' : 'MISSING'}`,
+  );
+}
 
 // ─── Context ────────────────────────────────────────────────────────────────
 
@@ -431,6 +443,63 @@ export function WalletProvider({ children }: WalletProviderProps) {
     } catch { /* ignore */ }
   }, []);
 
+  // ─── Execute Challenge ──────────────────────────────────────────────────
+
+  const executeChallenge = useCallback(
+    async (challengeId: string) => {
+      let sdk = sdkRef.current;
+
+      // If SDK isn't initialized yet (e.g., session was restored from storage),
+      // create a fresh instance with the correct appId
+      if (!sdk || !sdkReadyRef.current) {
+        const { W3SSdk } = await import('@circle-fin/w3s-pw-web-sdk');
+        sdk = new W3SSdk({
+          appSettings: { appId: CIRCLE_APP_ID },
+        });
+      }
+
+      if (!session) {
+        throw new Error('No wallet session for challenge execution');
+      }
+
+      sdk.setAuthentication({
+        userToken: session.userToken,
+        encryptionKey: session.encryptionKey,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        sdk.execute(challengeId, (err: unknown) => {
+          if (err) {
+            const error = err as { message?: string; code?: number };
+            const msg = error.message || 'Challenge execution failed';
+
+            // Detect expired/invalid encryption key or session
+            const isSessionExpired =
+              msg.includes('encryption key') ||
+              msg.includes('decrypting') ||
+              msg.includes('Invalid') ||
+              error.code === 155104 || // userTokenExpired
+              error.code === 155118;   // invalidEncryptionKey
+
+            if (isSessionExpired) {
+              // Clear stale session — user must re-login
+              console.warn('[WalletContext] Session expired, clearing credentials');
+              setSession(null);
+              setWalletInfo(null);
+              try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+              reject(new Error('Session expired. Please log in again.'));
+            } else {
+              reject(new Error(msg));
+            }
+          } else {
+            resolve();
+          }
+        });
+      });
+    },
+    [session],
+  );
+
   // ─── Context Value ──────────────────────────────────────────────────────
 
   const value = useMemo<WalletContextValue>(
@@ -441,8 +510,9 @@ export function WalletProvider({ children }: WalletProviderProps) {
       error,
       login,
       logout,
+      executeChallenge,
     }),
-    [session, walletInfo, isLoading, error, login, logout],
+    [session, walletInfo, isLoading, error, login, logout, executeChallenge],
   );
 
   return (

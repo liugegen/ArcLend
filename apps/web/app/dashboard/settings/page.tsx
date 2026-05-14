@@ -1,14 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { useAccount } from 'wagmi';
+import { useWalletAccount } from '../../../hooks/useWalletAccount';
 import { useWallet } from '../../../contexts/WalletContext';
 import { USDC_ADDRESS, ARCLEND_VAULT_ADDRESS, PRICE_ORACLE_ADDRESS, INTEREST_RATE_MODEL_ADDRESS } from '../../../lib/contracts';
 
 // ─── Settings Page ──────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { address } = useAccount();
+  const { address } = useWalletAccount();
   const { walletInfo, session, logout } = useWallet();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -139,7 +139,7 @@ export default function SettingsPage() {
         <p className="mt-2 text-sm text-[var(--muted-foreground)] leading-relaxed">
           ArcLend is a lending and borrowing protocol built on Arc Network. It uses Circle Embedded
           Wallets for seamless onboarding — no seed phrases, no gas tokens. Supply USDC/EURC to earn
-          yield, deposit USYC as collateral, and borrow against your position with gasless transactions.
+          yield, borrow against your position, and manage your portfolio with gasless transactions.
         </p>
         <div className="mt-4 flex gap-4 text-xs text-[var(--muted-foreground)]">
           <span>Version 0.1.0</span>

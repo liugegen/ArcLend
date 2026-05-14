@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useAccount } from 'wagmi';
+import { useWalletAccount } from '../../hooks/useWalletAccount';
 import { useUserPosition } from '../../hooks/useUserPosition';
 import { useMarketData } from '../../hooks/useMarketData';
 import { useHealthFactor } from '../../hooks/useHealthFactor';
@@ -115,7 +115,7 @@ function HealthFactorRing({ value, isWarning, isLiquidatable }: {
 // ─── Dashboard Page ─────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { isConnected } = useAccount();
+  const { isConnected } = useWalletAccount();
 
   const {
     position,
@@ -144,7 +144,6 @@ export default function DashboardPage() {
   const {
     unifiedBalance,
     arcBalance,
-    preCreditedBalance,
     isLoading: isBalanceLoading,
     isError: isBalanceError,
     refetch: refetchBalance,
@@ -160,13 +159,11 @@ export default function DashboardPage() {
   let suppliedBalance = 0n;
   let borrowedBalance = 0n;
 
-  if (position && usdcPoolState) {
-    if (usdcPoolState.totalShares > 0n) {
-      suppliedBalance =
-        (position.supplyShares * usdcPoolState.totalDeposits) /
-        usdcPoolState.totalShares;
-    }
-    if (position.borrowIndex > 0n) {
+  if (position) {
+    // collateralBalance = total supply value across ALL assets (from contract)
+    suppliedBalance = position.collateralBalance;
+
+    if (position.borrowIndex > 0n && usdcPoolState) {
       borrowedBalance =
         (position.borrowPrincipal * usdcPoolState.borrowIndex) /
         position.borrowIndex;
@@ -336,12 +333,11 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
         {[
           { href: '/dashboard/supply', label: 'Supply', icon: 'M12 4.5v15m7.5-7.5h-15', color: 'var(--success)' },
           { href: '/dashboard/borrow', label: 'Borrow', icon: 'M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3', color: 'var(--accent)' },
           { href: '/dashboard/repay', label: 'Repay', icon: 'M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18', color: 'var(--warning)' },
-          { href: '/dashboard/bridge', label: 'Bridge', icon: 'M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5', color: 'var(--muted-foreground)' },
         ].map((action) => (
           <Link
             key={action.href}
@@ -368,7 +364,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <h2 className="text-sm font-semibold text-[var(--foreground)]">Unified Balance</h2>
-              <p className="text-[11px] text-[var(--muted-foreground)]">Arc Network + Arbitrum</p>
+              <p className="text-[11px] text-[var(--muted-foreground)]">Arc Network • Circle USDC</p>
             </div>
           </div>
           {isBalanceError ? (
@@ -384,10 +380,6 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-[var(--muted-foreground)]">Arc Network</span>
                   <span className="font-medium text-[var(--foreground)]">${formatTokenAmount(arcBalance)}</span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-[var(--muted-foreground)]">Pre-credited (CCTP)</span>
-                  <span className="font-medium text-[var(--foreground)]">${formatTokenAmount(preCreditedBalance)}</span>
                 </div>
               </div>
             </>

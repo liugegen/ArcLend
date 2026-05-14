@@ -36,8 +36,6 @@ export function StatsGridContainer() {
 
   const {
     unifiedBalance,
-    arcBalance,
-    preCreditedBalance,
     isLoading: isBalanceLoading,
     isError: isBalanceError,
     refetch: refetchBalance,
@@ -91,18 +89,11 @@ export function StatsGridContainer() {
   const stats: PortfolioMetric[] = [];
 
   if (!isLoading && !isError) {
-    // Unified Balance metric
+    // Wallet Balance metric
     stats.push({
-      label: "Unified Balance",
+      label: "Wallet Balance",
       value: formatUSDC(unifiedBalance),
-      subValue: `Arc: ${formatUSDC(arcBalance)}`,
-    });
-
-    // Pre-credited Balance metric
-    stats.push({
-      label: "Pre-Credited",
-      value: formatUSDC(preCreditedBalance),
-      subValue: "CCTP bridge balance",
+      subValue: "USDC on Arc Network",
     });
 
     // Total markets metric
@@ -122,6 +113,18 @@ export function StatsGridContainer() {
       value: `${avgSupplyAPY.toFixed(2)}%`,
       subValue: "Across all markets",
       trend: avgSupplyAPY > 0 ? "up" : "neutral",
+    });
+
+    // Average Borrow APY across markets
+    const avgBorrowAPY =
+      markets.length > 0
+        ? markets.reduce((sum, m) => sum + m.borrowAPY, 0) / markets.length
+        : 0;
+    stats.push({
+      label: "Avg Borrow APY",
+      value: `${avgBorrowAPY.toFixed(2)}%`,
+      subValue: "Across all markets",
+      trend: avgBorrowAPY > 0 ? "up" : "neutral",
     });
   }
 

@@ -98,13 +98,10 @@ export function PortfolioHeroContainer() {
   let suppliedBalance = 0n;
   let borrowedBalance = 0n;
 
-  if (position && usdcPoolState) {
-    if (usdcPoolState.totalShares > 0n) {
-      suppliedBalance =
-        (position.supplyShares * usdcPoolState.totalDeposits) /
-        usdcPoolState.totalShares;
-    }
-    if (position.borrowIndex > 0n) {
+  if (position) {
+    suppliedBalance = position.collateralBalance;
+
+    if (position.borrowIndex > 0n && usdcPoolState) {
       borrowedBalance =
         (position.borrowPrincipal * usdcPoolState.borrowIndex) /
         position.borrowIndex;

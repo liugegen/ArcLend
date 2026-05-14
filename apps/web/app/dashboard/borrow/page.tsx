@@ -2,30 +2,24 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { encodeFunctionData } from 'viem';
-import { useAccount, useReadContract } from 'wagmi';
 
-import { useTransactionFlow } from '../../../hooks/useTransactionFlow';
+import { useWalletAccount } from '../../../hooks/useWalletAccount';
+import { useTransactionOrchestrator } from '../../../hooks/useTransactionOrchestrator';
 import { useHealthFactor } from '../../../hooks/useHealthFactor';
 import { useUserPosition } from '../../../hooks/useUserPosition';
+import { TransactionProgress, TransactionError } from '../../../components/TransactionStatus';
+import { TransactionSuccessModal, type TransactionSuccessData } from '../../../components/TransactionSuccessModal';
 import {
   arcLendVaultAbi,
-  priceOracleAbi,
   ARCLEND_VAULT_ADDRESS,
-  PRICE_ORACLE_ADDRESS,
   USDC_ADDRESS,
-  USYC_ADDRESS,
+  EURC_ADDRESS,
 } from '../../../lib/contracts';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Default collateral factor (80%) — used for client-side HF preview */
-const DEFAULT_COLLATERAL_FACTOR = 0.8;
-
-/** USDC has 6 decimals */
+const COLLATERAL_FACTOR = 0.8;
 const USDC_DECIMALS = 6;
-
-/** USYC has 18 decimals */
-const USYC_DECIMALS = 18;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -43,68 +37,35 @@ function parseTokenAmount(value: string, decimals = 6): bigint {
   return BigInt(wholePart) * BigInt(10 ** decimals) + BigInt(paddedFrac);
 }
 
-function formatHealthFactor(hf: number | null): string {
-  if (hf == null) return '—';
-  if (hf > 100) return '∞';
-  return hf.toFixed(4);
-}
-
-function getHealthFactorColor(hf: number | null): string {
-  if (hf == null) return 'text-[var(--muted-foreground)]';
-  if (hf < 1.0) return 'text-[var(--danger)]';
-  if (hf <= 1.2) return 'text-[var(--warning)]';
-  return 'text-[var(--success)]';
-}
-
 // ─── Borrow Page ────────────────────────────────────────────────────────────
 
 export default function BorrowPage() {
-  const { address, isConnected } = useAccount();
-
-  // ─── Local State ──────────────────────────────────────────────────────────
-
+  const { address, isConnected } = useWalletAccount();
   const [amountInput, setAmountInput] = useState('');
+  const [borrowAsset, setBorrowAsset] = useState<'USDC' | 'EURC'>('USDC');
 
-  // ─── Transaction Flow ─────────────────────────────────────────────────────
+  const borrowAssetAddress = borrowAsset === 'USDC' ? USDC_ADDRESS : EURC_ADDRESS;
 
-  const {
-    status: txStatus,
-    feeEstimate,
-    error: txError,
-    paymasterUnavailable,
-    estimateFee,
-    execute,
-    reset,
-  } = useTransactionFlow();
-
-  // ─── On-Chain Reads ───────────────────────────────────────────────────────
-
+  const { step, error: txError, receipt, executeTransaction, reset } = useTransactionOrchestrator();
   const { healthFactor, isWarning, isLiquidatable } = useHealthFactor();
   const { position, usdcPoolState } = useUserPosition();
 
-  // Read USYC collateral price from oracle (8 decimals)
-  const { data: usycPriceData } = useReadContract({
-    address: PRICE_ORACLE_ADDRESS,
-    abi: priceOracleAbi,
-    functionName: 'getAssetPrice',
-    args: [USYC_ADDRESS],
-    query: { enabled: isConnected, refetchInterval: 15_000 },
-  });
-
-  const usycPrice = (usycPriceData as bigint | undefined) ?? 0n;
-
   // ─── Derived State ────────────────────────────────────────────────────────
 
-  const collateralBalance = position?.collateralBalance ?? 0n;
+  // In v2, supplied assets automatically serve as collateral.
+  // Borrow power = total supplied value × collateral factor (80%)
+  const suppliedBalance = useMemo(() => {
+    // Use total collateral value from contract (sum of all supplied positions)
+    return position?.collateralBalance ?? 0n;
+  }, [position]);
 
-  // Collateral value in USD (collateralBalance * price / 10^(USYC_DECIMALS + ORACLE_PRICE_DECIMALS - USDC_DECIMALS))
-  // This gives us the value in USDC-equivalent (6 decimals)
-  const collateralValueUsd = useMemo(() => {
-    if (collateralBalance === 0n || usycPrice === 0n) return 0n;
-    // collateralBalance is 18 decimals, price is 8 decimals
-    // Result in 6 decimals: (balance * price) / 10^(18 + 8 - 6) = / 10^20
-    return (collateralBalance * usycPrice) / BigInt(10 ** 20);
-  }, [collateralBalance, usycPrice]);
+  // Collateral value = total supply value (returned by getUserPosition.collateralBalance)
+  const collateralValueUsd = suppliedBalance;
+
+  // Borrow power = collateral value * collateral factor
+  const borrowPower = useMemo(() => {
+    return (collateralValueUsd * 80n) / 100n;
+  }, [collateralValueUsd]);
 
   // Current debt in USDC (6 decimals)
   const currentDebt = useMemo(() => {
@@ -113,119 +74,95 @@ export default function BorrowPage() {
     return (position.borrowPrincipal * usdcPoolState.borrowIndex) / position.borrowIndex;
   }, [position, usdcPoolState]);
 
-  const parsedAmount = useMemo(
-    () => parseTokenAmount(amountInput, USDC_DECIMALS),
-    [amountInput],
-  );
+  // Available to borrow = borrow power - current debt
+  const availableToBorrow = useMemo(() => {
+    const available = borrowPower - currentDebt;
+    return available > 0n ? available : 0n;
+  }, [borrowPower, currentDebt]);
 
-  // Available pool liquidity
+  const parsedAmount = useMemo(() => parseTokenAmount(amountInput, USDC_DECIMALS), [amountInput]);
+
+  // Pool liquidity
   const availableLiquidity = useMemo(() => {
     if (!usdcPoolState) return 0n;
     const available = usdcPoolState.totalDeposits - usdcPoolState.totalBorrows;
     return available > 0n ? available : 0n;
   }, [usdcPoolState]);
 
-  // Projected HF after borrow: (collateralValue * CF) / (currentDebt + newBorrow)
+  // Projected HF
   const projectedHealthFactor = useMemo((): number | null => {
     if (parsedAmount <= 0n) return healthFactor;
     if (collateralValueUsd === 0n) return 0;
-
     const totalDebtAfter = currentDebt + parsedAmount;
     if (totalDebtAfter === 0n) return null;
-
-    // HF = (collateralValueUsd * CF) / totalDebtAfter
-    // Both collateralValueUsd and totalDebtAfter are in 6 decimals
-    const numerator = Number(collateralValueUsd) * DEFAULT_COLLATERAL_FACTOR;
-    const denominator = Number(totalDebtAfter);
-
-    if (denominator === 0) return null;
-    return numerator / denominator;
+    return (Number(collateralValueUsd) * COLLATERAL_FACTOR) / Number(totalDebtAfter);
   }, [parsedAmount, collateralValueUsd, currentDebt, healthFactor]);
 
   // Validation
   const validationError = useMemo((): string | null => {
     if (!amountInput) return null;
     if (parsedAmount <= 0n) return 'Amount must be greater than 0';
-    if (parsedAmount < parseTokenAmount('0.01', USDC_DECIMALS))
-      return 'Minimum borrow amount is 0.01 USDC';
     if (usdcPoolState?.borrowsPaused) return 'Borrowing is currently paused';
     if (parsedAmount > availableLiquidity) return 'Insufficient pool liquidity';
-    if (collateralBalance === 0n) return 'No collateral deposited';
+    if (suppliedBalance === 0n) return 'No collateral — supply assets first';
+    if (parsedAmount > availableToBorrow) return 'Exceeds your borrow power';
     if (projectedHealthFactor != null && projectedHealthFactor < 1.0)
-      return 'Borrow would cause undercollateralization (HF < 1.0)';
+      return 'Would cause liquidation risk (Health Factor < 1.0)';
     return null;
-  }, [
-    amountInput,
-    parsedAmount,
-    usdcPoolState,
-    availableLiquidity,
-    collateralBalance,
-    projectedHealthFactor,
-  ]);
+  }, [amountInput, parsedAmount, usdcPoolState, availableLiquidity, suppliedBalance, availableToBorrow, projectedHealthFactor]);
 
   const isValidAmount = parsedAmount > 0n && !validationError;
+  const isProcessing = step !== 'idle' && step !== 'confirmed' && step !== 'failed';
 
-  // Determine if confirm button should be disabled
-  const isConfirmDisabled = !isValidAmount || (projectedHealthFactor != null && projectedHealthFactor < 1.0);
+  // Success modal
+  const [successData, setSuccessData] = useState<TransactionSuccessData | null>(null);
+  if (step === 'confirmed' && receipt && !successData) {
+    setSuccessData({
+      type: 'Borrow',
+      amount: amountInput,
+      asset: borrowAsset,
+      txHash: receipt.txHash,
+      walletAddress: address,
+      confirmedAt: receipt.confirmedAt,
+    });
+  }
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
   const handleAmountChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const value = e.target.value;
-      // Allow only valid decimal input (up to 6 decimal places)
       if (value === '' || /^\d*\.?\d{0,6}$/.test(value)) {
         setAmountInput(value);
-        if (txStatus !== 'idle') {
-          reset();
-        }
+        if (step !== 'idle') reset();
       }
     },
-    [txStatus, reset],
+    [step, reset],
   );
 
-  const handleEstimateFee = useCallback(async () => {
+  const handleBorrow = useCallback(async () => {
     if (!isValidAmount) return;
 
     const borrowCallData = encodeFunctionData({
       abi: arcLendVaultAbi,
       functionName: 'borrow',
-      args: [USDC_ADDRESS, parsedAmount],
+      args: [borrowAssetAddress, parsedAmount],
     });
 
-    await estimateFee(borrowCallData);
-  }, [isValidAmount, parsedAmount, estimateFee]);
-
-  const handleConfirm = useCallback(async () => {
-    await execute();
-  }, [execute]);
+    // Borrow doesn't need token approval
+    await executeTransaction({
+      contractAddress: ARCLEND_VAULT_ADDRESS,
+      callData: borrowCallData,
+    });
+  }, [isValidAmount, parsedAmount, borrowAssetAddress, executeTransaction]);
 
   const handleReset = useCallback(() => {
     reset();
     setAmountInput('');
+    setSuccessData(null);
   }, [reset]);
 
-  // ─── Map transaction errors to user-friendly messages ─────────────────────
-
-  const displayError = useMemo((): string | null => {
-    if (!txError) return null;
-
-    const msg = txError.message.toLowerCase();
-
-    if (msg.includes('undercollateralized') || msg.includes('health factor')) {
-      return 'Cannot borrow: your position would become undercollateralized. Add more collateral or reduce the borrow amount.';
-    }
-    if (msg.includes('paused') || msg.includes('borrow')) {
-      return 'Borrowing is currently paused by the protocol administrator. Please try again later.';
-    }
-    if (msg.includes('liquidity') || msg.includes('insufficient')) {
-      return 'Insufficient liquidity in the lending pool. Try a smaller amount or wait for more deposits.';
-    }
-
-    return txError.message;
-  }, [txError]);
-
-  // ─── Not Connected State ──────────────────────────────────────────────────
+  // ─── Not Connected ────────────────────────────────────────────────────────
 
   if (!isConnected) {
     return (
@@ -241,231 +178,154 @@ export default function BorrowPage() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="mx-auto max-w-lg space-y-6">
-      {/* Page Header */}
+    <>
+      {successData && (
+        <TransactionSuccessModal data={successData} onClose={handleReset} />
+      )}
+      <div className="mx-auto max-w-lg space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-[var(--foreground)]">Borrow</h1>
         <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-          Borrow USDC against your USYC collateral.
+          Borrow USDC against your deposited collateral.
         </p>
       </div>
 
-      {/* Collateral Info Card */}
+      {/* Position Overview */}
       <div className="card-base p-5">
-        <h2 className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Your Collateral (USYC)</h2>
-        <div className="mt-3 flex items-baseline justify-between">
-          <p className="text-xl font-bold text-[var(--foreground)]">
-            {formatTokenAmount(collateralBalance, USYC_DECIMALS)} USYC
-          </p>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            ≈ ${formatTokenAmount(collateralValueUsd, USDC_DECIMALS)}
-          </p>
-        </div>
-        {collateralBalance === 0n && (
-          <p className="mt-2 text-xs text-[var(--warning)]">
-            You need to deposit USYC collateral before borrowing.
-          </p>
-        )}
-      </div>
-
-      {/* Health Factor Display */}
-      <div className="card-base p-5">
-        <div className="flex items-center justify-between">
+        <div className="grid grid-cols-2 gap-4">
           <div>
-            <h2 className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Current Health Factor</h2>
-            <p className={`mt-1.5 text-2xl font-bold ${getHealthFactorColor(healthFactor)}`}>
-              {formatHealthFactor(healthFactor)}
+            <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Collateral Value</p>
+            <p className="mt-1 text-lg font-bold text-[var(--foreground)]">
+              ${formatTokenAmount(collateralValueUsd, USDC_DECIMALS)}
             </p>
           </div>
-          {parsedAmount > 0n && projectedHealthFactor != null && (
-            <div className="text-right">
-              <h2 className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">After Borrow</h2>
-              <p className={`mt-1.5 text-2xl font-bold ${getHealthFactorColor(projectedHealthFactor)}`}>
-                {formatHealthFactor(projectedHealthFactor)}
-              </p>
-            </div>
-          )}
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Borrow Power</p>
+            <p className="mt-1 text-lg font-bold text-[var(--success)]">
+              ${formatTokenAmount(availableToBorrow, USDC_DECIMALS)}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Current Debt</p>
+            <p className="mt-1 text-lg font-bold text-[var(--danger)]">
+              ${formatTokenAmount(currentDebt, USDC_DECIMALS)}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Health Factor</p>
+            <p className={`mt-1 text-lg font-bold ${
+              healthFactor == null ? 'text-[var(--muted-foreground)]'
+                : isLiquidatable ? 'text-[var(--danger)]'
+                : isWarning ? 'text-[var(--warning)]'
+                : 'text-[var(--success)]'
+            }`}>
+              {healthFactor != null ? healthFactor.toFixed(2) : '∞'}
+            </p>
+          </div>
         </div>
-
-        {/* HF Change Arrow */}
-        {parsedAmount > 0n && projectedHealthFactor != null && healthFactor != null && (
-          <div className="mt-3 flex items-center gap-2 rounded-xl bg-[var(--background)] px-3 py-2 ring-1 ring-[var(--card-border)]">
-            <span className={`text-sm font-medium ${getHealthFactorColor(healthFactor)}`}>
-              {formatHealthFactor(healthFactor)}
-            </span>
-            <svg className="h-4 w-4 text-[var(--muted-foreground)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-            </svg>
-            <span className={`text-sm font-medium ${getHealthFactorColor(projectedHealthFactor)}`}>
-              {formatHealthFactor(projectedHealthFactor)}
-            </span>
-            {projectedHealthFactor < 1.0 && (
-              <span className="ml-auto text-xs font-semibold text-[var(--danger)]">Liquidatable</span>
-            )}
-            {projectedHealthFactor >= 1.0 && projectedHealthFactor <= 1.2 && (
-              <span className="ml-auto text-xs font-semibold text-[var(--warning)]">High Risk</span>
-            )}
-          </div>
-        )}
-
-        {/* Liquidation Warning */}
-        {isWarning && (
-          <div className="mt-3 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning-muted)] px-3 py-2">
-            <p className="text-xs text-[var(--warning)]">
-              ⚠️ Your current Health Factor is low. Borrowing more may increase liquidation risk.
-            </p>
-          </div>
+        {suppliedBalance === 0n && (
+          <p className="mt-3 text-xs text-[var(--warning)]">
+            Supply assets first to enable borrowing.
+          </p>
         )}
       </div>
 
-      {/* Borrow Form Card */}
+      {/* Borrow Form */}
       <div className="card-base p-6">
-        {/* Amount Input */}
+        {/* Asset Selector */}
         <div>
-          <label htmlFor="borrow-amount-input" className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
-            Borrow Amount (USDC)
+          <label htmlFor="borrow-asset" className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+            Borrow Asset
+          </label>
+          <select
+            id="borrow-asset"
+            value={borrowAsset}
+            onChange={(e) => { setBorrowAsset(e.target.value as 'USDC' | 'EURC'); setAmountInput(''); if (step !== 'idle') reset(); }}
+            disabled={isProcessing}
+            className="mt-2 block w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-4 py-3 text-sm font-medium text-[var(--foreground)] transition-colors focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--input-focus)] disabled:opacity-50"
+          >
+            <option value="USDC">USDC</option>
+            <option value="EURC">EURC</option>
+          </select>
+        </div>
+
+        <div className="mt-5">
+          <label htmlFor="borrow-amount" className="block text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+            Amount
           </label>
           <div className="relative mt-2">
             <input
-              id="borrow-amount-input"
+              id="borrow-amount"
               type="text"
               inputMode="decimal"
               placeholder="0.00"
               value={amountInput}
               onChange={handleAmountChange}
-              disabled={txStatus !== 'idle' && txStatus !== 'failed'}
+              disabled={isProcessing}
               className={`block w-full rounded-xl border px-4 py-3 text-lg font-semibold text-[var(--foreground)] placeholder-[var(--muted)] transition-colors focus:outline-none focus:ring-2 disabled:opacity-50 ${
                 validationError
                   ? 'border-[var(--danger)]/50 bg-[var(--danger-muted)] focus:ring-[var(--danger)]/30'
                   : 'border-[var(--input-border)] bg-[var(--input-bg)] focus:border-[var(--accent)] focus:ring-[var(--input-focus)]'
               }`}
-              aria-describedby="borrow-info"
               aria-invalid={!!validationError}
             />
             <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-[var(--muted-foreground)]">
-              USDC
+              {borrowAsset}
             </span>
           </div>
           <div className="mt-2 flex items-center justify-between">
-            <p id="borrow-info" className="text-xs text-[var(--muted-foreground)]">
-              Available liquidity: {formatTokenAmount(availableLiquidity, USDC_DECIMALS)} USDC
+            <p className="text-xs text-[var(--muted-foreground)]">
+              Available: {formatTokenAmount(availableToBorrow, USDC_DECIMALS)} {borrowAsset}
             </p>
-            {currentDebt > 0n && (
-              <p className="text-xs text-[var(--muted-foreground)]">
-                Debt: {formatTokenAmount(currentDebt, USDC_DECIMALS)}
+            {parsedAmount > 0n && projectedHealthFactor != null && (
+              <p className={`text-xs font-medium ${projectedHealthFactor < 1.0 ? 'text-[var(--danger)]' : projectedHealthFactor < 1.2 ? 'text-[var(--warning)]' : 'text-[var(--muted-foreground)]'}`}>
+                HF after: {projectedHealthFactor.toFixed(2)}
               </p>
             )}
           </div>
           {validationError && (
-            <p className="mt-2 text-xs font-medium text-[var(--danger)]" role="alert">
-              {validationError}
-            </p>
+            <p className="mt-2 text-xs font-medium text-[var(--danger)]" role="alert">{validationError}</p>
           )}
         </div>
 
-        {/* Fee Estimate Display */}
-        {feeEstimate && (txStatus === 'confirming' || txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
-          <div className="mt-5 rounded-xl border border-[var(--card-border)] bg-[var(--background)] p-4">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-[var(--muted-foreground)]">Gas Fee</span>
-              <span className="font-semibold text-[var(--foreground)]">
-                {formatTokenAmount(feeEstimate.usdcFee, 6)} USDC
-              </span>
-            </div>
-            <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
-              Sponsored by Circle Paymaster — no ARC token needed
-            </p>
-          </div>
-        )}
+        {/* Transaction States */}
+        <TransactionProgress
+          step={step}
+          stepOverrides={{
+            executing: { label: 'Borrowing USDC', detail: 'Sign the borrow transaction in your wallet' },
+          }}
+        />
 
-        {/* Paymaster Unavailable Fallback */}
-        {paymasterUnavailable && (
-          <div className="mt-5 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning-muted)] p-4">
-            <p className="text-sm font-medium text-[var(--warning)]">Paymaster Unavailable</p>
-            <p className="mt-1 text-xs text-[var(--warning)]/80">
-              Gas sponsorship is temporarily unavailable. You can pay gas in ARC token directly.
-            </p>
-          </div>
-        )}
+        {txError && step === 'failed' && <TransactionError error={txError} />}
 
-        {/* Transaction Error */}
-        {displayError && txStatus === 'failed' && (
-          <div className="mt-5 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger-muted)] p-4">
-            <p className="text-sm text-[var(--danger)]">{displayError}</p>
-          </div>
-        )}
-
-        {/* Transaction Status Indicator */}
-        {(txStatus === 'signing' || txStatus === 'submitting' || txStatus === 'pending') && (
-          <div className="mt-5 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-muted)] p-4">
-            <div className="flex items-center gap-3">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-              <span className="text-sm font-medium text-[var(--accent)]">
-                {txStatus === 'signing' && 'Signing transaction...'}
-                {txStatus === 'submitting' && 'Submitting transaction...'}
-                {txStatus === 'pending' && 'Waiting for confirmation...'}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Confirmed Status */}
-        {txStatus === 'confirmed' && (
-          <div className="mt-5 rounded-xl border border-[var(--success)]/30 bg-[var(--success-muted)] p-4">
-            <div className="flex items-center gap-3">
-              <svg className="h-5 w-5 text-[var(--success)]" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              <span className="text-sm font-semibold text-[var(--success)]">
-                Borrow confirmed! USDC has been transferred to your wallet.
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={handleReset}
-              className="mt-3 text-sm font-medium text-[var(--success)] hover:opacity-80"
-            >
-              Borrow more →
-            </button>
-          </div>
-        )}
-
-        {/* Action Buttons */}
+        {/* Action Button */}
         <div className="mt-6">
-          {txStatus === 'idle' || txStatus === 'failed' ? (
+          {(step === 'idle' || step === 'failed') && (
             <button
               type="button"
-              onClick={handleEstimateFee}
-              disabled={isConfirmDisabled}
+              onClick={handleBorrow}
+              disabled={!isValidAmount}
               className="w-full rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl hover:shadow-[var(--accent)]/30 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
-              {txStatus === 'failed' ? 'Retry' : 'Borrow'}
+              {step === 'failed' ? 'Retry' : 'Borrow'}
             </button>
-          ) : txStatus === 'estimating' ? (
-            <button disabled className="w-full rounded-xl bg-[var(--accent)] px-4 py-3.5 text-sm font-semibold text-white opacity-60">
-              Estimating fee...
+          )}
+          {isProcessing && (
+            <button
+              type="button"
+              onClick={reset}
+              className="w-full rounded-xl border border-[var(--card-border)] px-4 py-3.5 text-sm font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--card-hover)]"
+            >
+              Cancel
             </button>
-          ) : txStatus === 'confirming' ? (
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={reset}
-                className="flex-1 rounded-xl border border-[var(--card-border)] px-4 py-3.5 text-sm font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--card-hover)]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirm}
-                disabled={isConfirmDisabled}
-                className="flex-1 rounded-xl bg-gradient-to-r from-[var(--accent)] to-purple-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-[var(--accent)]/20 transition-all hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Confirm Borrow
-              </button>
-            </div>
-          ) : null}
+          )}
         </div>
+
+        <p className="mt-4 text-center text-[10px] text-[var(--muted-foreground)]">
+          Transactions are executed via Circle Embedded Wallet on Arc Network
+        </p>
       </div>
     </div>
+    </>
   );
 }

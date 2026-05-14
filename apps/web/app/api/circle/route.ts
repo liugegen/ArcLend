@@ -1,191 +1,280 @@
 /**
- * Circle API Backend Route
+ * Circle API Backend Route — Hardened Implementation
  *
- * This route proxies requests to Circle's User Controlled Wallets API.
- * The CIRCLE_API_KEY is kept server-side only — never exposed to the browser.
- *
- * Supported actions:
- * - createDeviceToken: Exchange deviceId for deviceToken + deviceEncryptionKey
- * - initializeUser: Initialize a user and get a challengeId for wallet creation
- * - listWallets: List wallets for an authenticated user
- * - getTokenBalance: Get token balances for a specific wallet
- *
- * Migration note: The previous implementation called a non-existent
- * POST /wallets/authenticate endpoint directly from the browser. Circle's
- * User Controlled Wallets architecture requires:
- * 1. Server-side calls with the API key (this route)
- * 2. Client-side SDK (@circle-fin/w3s-pw-web-sdk) for social login + challenges
+ * Proxies requests to Circle's User Controlled Wallets API.
+ * CIRCLE_API_KEY is server-side only.
  */
 
 import { NextResponse } from 'next/server';
 
+// ─── Environment ────────────────────────────────────────────────────────────
+
 const CIRCLE_BASE_URL =
-  process.env.NEXT_PUBLIC_CIRCLE_BASE_URL ?? 'https://api.circle.com';
-const CIRCLE_API_KEY = process.env.CIRCLE_API_KEY;
+  process.env.NEXT_PUBLIC_CIRCLE_BASE_URL || 'https://api.circle.com';
+const CIRCLE_API_KEY = process.env.CIRCLE_API_KEY || '';
+
+console.log(
+  `[api/circle] module loaded | baseUrl=${CIRCLE_BASE_URL} | apiKeySet=${!!CIRCLE_API_KEY}`,
+);
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function errorResponse(message: string, status = 500) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+async function circleRequest(
+  path: string,
+  method: 'GET' | 'POST',
+  userToken?: string,
+  body?: Record<string, unknown>,
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const url = `${CIRCLE_BASE_URL}${path}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    Authorization: `Bearer ${CIRCLE_API_KEY}`,
+  };
+  if (userToken) {
+    headers['X-User-Token'] = userToken;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, data };
+  } catch (err) {
+    clearTimeout(timeout);
+    const msg = err instanceof Error ? err.message : 'Unknown fetch error';
+    console.error(`[api/circle] fetch failed: ${method} ${url} — ${msg}`);
+    throw new Error(`Circle API request failed: ${msg}`);
+  }
+}
+
+// ─── Route Handler ──────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
+  console.log('[api/circle] POST handler entered');
+
+  // Guard: API key
   if (!CIRCLE_API_KEY) {
-    return NextResponse.json(
-      { error: 'CIRCLE_API_KEY is not configured on the server' },
-      { status: 500 },
-    );
+    console.error('[api/circle] CIRCLE_API_KEY is not set');
+    return errorResponse('CIRCLE_API_KEY is not configured on the server', 500);
+  }
+
+  // Parse body
+  let body: Record<string, unknown>;
+  try {
+    const text = await request.text();
+    console.log(`[api/circle] body length=${text.length}`);
+    body = JSON.parse(text);
+  } catch (err) {
+    console.error('[api/circle] failed to parse request body:', err);
+    return errorResponse('Invalid JSON body', 400);
+  }
+
+  const action = body.action as string | undefined;
+  console.log(`[api/circle] action=${action}`);
+
+  if (!action) {
+    return errorResponse('Missing action', 400);
   }
 
   try {
-    const body = await request.json();
-    const { action, ...params } = body ?? {};
-
-    if (!action) {
-      return NextResponse.json({ error: 'Missing action' }, { status: 400 });
-    }
-
     switch (action) {
-      // ─── Create Device Token ────────────────────────────────────────────
-      // Exchanges a browser-generated deviceId for a deviceToken and
-      // deviceEncryptionKey used by the Web SDK for social login.
+      // ─── createDeviceToken ──────────────────────────────────────────────
       case 'createDeviceToken': {
-        const { deviceId } = params;
-        if (!deviceId) {
-          return NextResponse.json(
-            { error: 'Missing deviceId' },
-            { status: 400 },
-          );
-        }
+        const deviceId = body.deviceId as string;
+        if (!deviceId) return errorResponse('Missing deviceId', 400);
 
-        const response = await fetch(
-          `${CIRCLE_BASE_URL}/v1/w3s/users/social/token`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${CIRCLE_API_KEY}`,
-            },
-            body: JSON.stringify({
-              idempotencyKey: crypto.randomUUID(),
-              deviceId,
-            }),
-          },
+        console.log('[api/circle] createDeviceToken — calling Circle');
+        const result = await circleRequest(
+          '/v1/w3s/users/social/token',
+          'POST',
+          undefined,
+          { idempotencyKey: crypto.randomUUID(), deviceId },
         );
 
-        const data = await response.json();
-
-        if (!response.ok) {
-          return NextResponse.json(data, { status: response.status });
+        if (!result.ok) {
+          console.log(`[api/circle] createDeviceToken — Circle returned ${result.status}`);
+          return jsonResponse(result.data, result.status);
         }
 
-        return NextResponse.json(data.data, { status: 200 });
+        const responseData = result.data as Record<string, unknown>;
+        return jsonResponse(responseData.data ?? responseData, 200);
       }
 
-      // ─── Initialize User ────────────────────────────────────────────────
-      // Creates or initializes a Circle user and returns a challengeId
-      // for wallet creation. If user is already initialized, Circle returns
-      // error code 155106.
+      // ─── initializeUser ─────────────────────────────────────────────────
       case 'initializeUser': {
-        const { userToken } = params;
-        if (!userToken) {
-          return NextResponse.json(
-            { error: 'Missing userToken' },
-            { status: 400 },
-          );
-        }
+        const userToken = body.userToken as string;
+        if (!userToken) return errorResponse('Missing userToken', 400);
 
-        const response = await fetch(
-          `${CIRCLE_BASE_URL}/v1/w3s/user/initialize`,
+        console.log('[api/circle] initializeUser — calling Circle');
+        const result = await circleRequest(
+          '/v1/w3s/user/initialize',
+          'POST',
+          userToken,
           {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${CIRCLE_API_KEY}`,
-              'X-User-Token': userToken,
-            },
-            body: JSON.stringify({
-              idempotencyKey: crypto.randomUUID(),
-              accountType: 'SCA',
-              blockchains: ['ARC-TESTNET'],
-            }),
+            idempotencyKey: crypto.randomUUID(),
+            accountType: 'SCA',
+            blockchains: ['ARC-TESTNET'],
           },
         );
 
-        const data = await response.json();
-
-        if (!response.ok) {
-          return NextResponse.json(data, { status: response.status });
+        if (!result.ok) {
+          console.log(`[api/circle] initializeUser — Circle returned ${result.status}`);
+          return jsonResponse(result.data, result.status);
         }
 
-        return NextResponse.json(data.data, { status: 200 });
+        const responseData = result.data as Record<string, unknown>;
+        return jsonResponse(responseData.data ?? responseData, 200);
       }
 
-      // ─── List Wallets ───────────────────────────────────────────────────
+      // ─── listWallets ────────────────────────────────────────────────────
       case 'listWallets': {
-        const { userToken } = params;
-        if (!userToken) {
-          return NextResponse.json(
-            { error: 'Missing userToken' },
-            { status: 400 },
-          );
+        const userToken = body.userToken as string;
+        if (!userToken) return errorResponse('Missing userToken', 400);
+
+        console.log('[api/circle] listWallets — calling Circle');
+        const result = await circleRequest('/v1/w3s/wallets', 'GET', userToken);
+
+        if (!result.ok) {
+          console.log(`[api/circle] listWallets — Circle returned ${result.status}`);
+          return jsonResponse(result.data, result.status);
         }
 
-        const response = await fetch(`${CIRCLE_BASE_URL}/v1/w3s/wallets`, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${CIRCLE_API_KEY}`,
-            'X-User-Token': userToken,
-          },
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          return NextResponse.json(data, { status: response.status });
-        }
-
-        return NextResponse.json(data.data, { status: 200 });
+        const responseData = result.data as Record<string, unknown>;
+        return jsonResponse(responseData.data ?? responseData, 200);
       }
 
-      // ─── Get Token Balance ──────────────────────────────────────────────
+      // ─── getTokenBalance ────────────────────────────────────────────────
       case 'getTokenBalance': {
-        const { userToken, walletId } = params;
+        const userToken = body.userToken as string;
+        const walletId = body.walletId as string;
         if (!userToken || !walletId) {
-          return NextResponse.json(
-            { error: 'Missing userToken or walletId' },
-            { status: 400 },
+          return errorResponse('Missing userToken or walletId', 400);
+        }
+
+        console.log('[api/circle] getTokenBalance — calling Circle');
+        const result = await circleRequest(
+          `/v1/w3s/wallets/${walletId}/balances`,
+          'GET',
+          userToken,
+        );
+
+        if (!result.ok) {
+          console.log(`[api/circle] getTokenBalance — Circle returned ${result.status}`);
+          return jsonResponse(result.data, result.status);
+        }
+
+        const responseData = result.data as Record<string, unknown>;
+        return jsonResponse(responseData.data ?? responseData, 200);
+      }
+
+      // ─── createContractExecution ────────────────────────────────────────
+      case 'createContractExecution': {
+        const userToken = body.userToken as string;
+        const walletId = body.walletId as string;
+        const contractAddress = body.contractAddress as string;
+        const callData = body.callData as string;
+        const feeLevel = (body.feeLevel as string) || 'MEDIUM';
+
+        if (!userToken || !walletId || !contractAddress || !callData) {
+          return errorResponse(
+            'Missing required params: userToken, walletId, contractAddress, callData',
+            400,
           );
         }
 
-        const response = await fetch(
-          `${CIRCLE_BASE_URL}/v1/w3s/wallets/${walletId}/balances`,
+        console.log(
+          `[api/circle] createContractExecution — contract=${contractAddress.slice(0, 10)}... wallet=${walletId.slice(0, 8)}...`,
+        );
+
+        const result = await circleRequest(
+          '/v1/w3s/user/transactions/contractExecution',
+          'POST',
+          userToken,
           {
-            method: 'GET',
-            headers: {
-              Accept: 'application/json',
-              Authorization: `Bearer ${CIRCLE_API_KEY}`,
-              'X-User-Token': userToken,
-            },
+            idempotencyKey: crypto.randomUUID(),
+            walletId,
+            contractAddress,
+            callData,
+            feeLevel,
           },
         );
 
-        const data = await response.json();
+        console.log(`[api/circle] createContractExecution — Circle returned ${result.status}`);
 
-        if (!response.ok) {
-          return NextResponse.json(data, { status: response.status });
+        if (!result.ok) {
+          return jsonResponse(result.data, result.status);
         }
 
-        return NextResponse.json(data.data, { status: 200 });
+        const responseData = result.data as Record<string, unknown>;
+        return jsonResponse(responseData.data ?? responseData, 200);
       }
 
-      default:
-        return NextResponse.json(
-          { error: `Unknown action: ${action}` },
-          { status: 400 },
+      // ─── getTransaction ─────────────────────────────────────────────────
+      case 'getTransaction': {
+        const userToken = body.userToken as string;
+        const transactionId = body.transactionId as string;
+        if (!userToken || !transactionId) {
+          return errorResponse('Missing userToken or transactionId', 400);
+        }
+
+        console.log(`[api/circle] getTransaction — id=${transactionId.slice(0, 8)}...`);
+        const result = await circleRequest(
+          `/v1/w3s/transactions/${transactionId}`,
+          'GET',
+          userToken,
         );
+
+        if (!result.ok) {
+          return jsonResponse(result.data, result.status);
+        }
+
+        const responseData = result.data as Record<string, unknown>;
+        return jsonResponse(responseData.data ?? responseData, 200);
+      }
+
+      // ─── Unknown action ─────────────────────────────────────────────────
+      default:
+        console.log(`[api/circle] unknown action: ${action}`);
+        return errorResponse(`Unknown action: ${action}`, 400);
     }
-  } catch (error) {
-    console.error('[/api/circle] Error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 },
-    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal server error';
+    console.error(`[api/circle] unhandled error in action=${action}:`, err);
+    return errorResponse(message, 500);
   }
+}
+
+// Also export GET for health check / route verification
+export async function GET() {
+  return jsonResponse({
+    status: 'ok',
+    route: '/api/circle',
+    apiKeyConfigured: !!CIRCLE_API_KEY,
+    baseUrl: CIRCLE_BASE_URL,
+    timestamp: Date.now(),
+  });
 }

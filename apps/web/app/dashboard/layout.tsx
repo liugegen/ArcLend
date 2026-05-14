@@ -20,7 +20,6 @@ import {
   PortfolioIcon,
   SupplyIcon,
   BorrowIcon,
-  BridgeIcon,
   SettingsIcon,
   RepayIcon,
   WithdrawIcon,
@@ -34,10 +33,9 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Portfolio', href: '/dashboard/portfolio', icon: PortfolioIcon },
   { label: 'Supply', href: '/dashboard/supply', icon: SupplyIcon },
   { label: 'Borrow', href: '/dashboard/borrow', icon: BorrowIcon },
-  { label: 'Bridge', href: '/dashboard/bridge', icon: BridgeIcon },
-  { label: 'Settings', href: '/dashboard/settings', icon: SettingsIcon },
   { label: 'Repay', href: '/dashboard/repay', icon: RepayIcon },
   { label: 'Withdraw', href: '/dashboard/withdraw', icon: WithdrawIcon },
+  { label: 'Settings', href: '/dashboard/settings', icon: SettingsIcon },
 ];
 
 // ─── Layout Entry Point ─────────────────────────────────────────────────────

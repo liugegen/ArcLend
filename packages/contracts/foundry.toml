@@ -16,10 +16,11 @@ remappings = [
 [rpc_endpoints]
 arc_testnet = "https://rpc.testnet.arc.network"
 
-# All tests run against a fork of Arc Testnet
-[profile.default.fork]
-url = "https://rpc.testnet.arc.network"
-chain_id = 5042002
+# All tests run locally (no fork required for unit tests)
+# Use --fork-url flag for integration tests against Arc Testnet
+# [profile.default.fork]
+# url = "https://rpc.testnet.arc.network"
+# chain_id = 5042002
 
 # Fuzz testing configuration
 [fuzz]

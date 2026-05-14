@@ -69,7 +69,7 @@ const CONTRACT_ERROR_MAP: Record<string, MappedError> = {
   },
   UnsupportedAsset: {
     title: 'Unsupported Asset',
-    message: 'This asset is not supported by the protocol. Please select USDC, EURC, or USYC.',
+    message: 'This asset is not supported by the protocol. Please select USDC or EURC.',
     severity: 'error',
   },
   InsufficientAllowance: {
